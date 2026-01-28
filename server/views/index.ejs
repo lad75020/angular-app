@@ -78,19 +78,7 @@
         </div>
       </div>
 
-      <div class="status-card mt-4">
-        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between">
-          <div>
-            <p class="mb-1 fw-semibold">Session</p>
-            <p class="mb-0 text-muted" ng-if="!vm.user">Not logged in.</p>
-            <p class="mb-0 text-muted" ng-if="vm.user">
-              Logged in as <strong>{{ vm.user.email }}</strong>
-            </p>
-          </div>
-          <%- include('partials/nav') %>
-        </div>
-      </div>
-    </div>
+
 
     <%- include('partials/toast') %>
     <%- include('partials/logs-modal') %>
