@@ -16,6 +16,7 @@
       vm.isAdminPage = path.indexOf("/admin") === 0;
       vm.isRevivesPage = path.indexOf("/revives") === 0;
       vm.isXanaxPage = path.indexOf("/xanax") === 0;
+      vm.isTrainingPage = path.indexOf("/training") === 0;
       vm.items = [];
       vm.itemsById = {};
       vm.itemTypes = [];
@@ -61,6 +62,13 @@
         last30Only: false,
         last30Total: 0,
       };
+      vm.training = { loading: false, empty: false };
+      vm.theme = {
+        mode: "auto",
+        applied: "light",
+        buttonLabel: "Theme: Auto",
+      };
+      vm.themeTimer = null;
       vm.chart = { open: false, title: "", points: [] };
       vm.wsCredentials = { login: "", password: "" };
       vm.navAction = "";
@@ -79,6 +87,221 @@
       function applyAsync(fn) {
         $scope.$applyAsync(fn);
       }
+
+      function getStoredCoords() {
+        try {
+          var raw = localStorage.getItem("themeCoords");
+          if (!raw) {
+            return null;
+          }
+          var data = JSON.parse(raw);
+          if (!data || !Number.isFinite(data.lat) || !Number.isFinite(data.lon)) {
+            return null;
+          }
+          if (Date.now() - data.ts > 7 * 24 * 60 * 60 * 1000) {
+            return null;
+          }
+          return data;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function storeCoords(lat, lon) {
+        try {
+          localStorage.setItem(
+            "themeCoords",
+            JSON.stringify({ lat: lat, lon: lon, ts: Date.now() })
+          );
+        } catch (err) {}
+      }
+
+      function getCoords() {
+        return new Promise(function (resolve, reject) {
+          var stored = getStoredCoords();
+          if (stored) {
+            resolve(stored);
+            return;
+          }
+          if (!navigator.geolocation) {
+            reject(new Error("Geolocation unavailable"));
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            function (pos) {
+              var lat = pos.coords.latitude;
+              var lon = pos.coords.longitude;
+              storeCoords(lat, lon);
+              resolve({ lat: lat, lon: lon });
+            },
+            function () {
+              reject(new Error("Geolocation denied"));
+            },
+            { timeout: 6000 }
+          );
+        });
+      }
+
+      function getSunTimes(date, lat, lon) {
+        var rad = Math.PI / 180;
+        var dayMs = 86400000;
+        var J1970 = 2440588;
+        var J2000 = 2451545;
+
+        function toJulian(d) {
+          return d.valueOf() / dayMs - 0.5 + J1970;
+        }
+        function fromJulian(j) {
+          return new Date((j + 0.5 - J1970) * dayMs);
+        }
+        function toDays(d) {
+          return toJulian(d) - J2000;
+        }
+
+        var e = rad * 23.4397;
+        function rightAscension(l, b) {
+          return Math.atan2(
+            Math.sin(l) * Math.cos(e) - Math.tan(b) * Math.sin(e),
+            Math.cos(l)
+          );
+        }
+        function declination(l, b) {
+          return Math.asin(
+            Math.sin(b) * Math.cos(e) + Math.cos(b) * Math.sin(e) * Math.sin(l)
+          );
+        }
+        function solarMeanAnomaly(d) {
+          return rad * (357.5291 + 0.98560028 * d);
+        }
+        function eclipticLongitude(M) {
+          var C =
+            rad *
+            (1.9148 * Math.sin(M) +
+              0.02 * Math.sin(2 * M) +
+              0.0003 * Math.sin(3 * M));
+          var P = rad * 102.9372;
+          return M + C + P + Math.PI;
+        }
+        function julianCycle(d, lw) {
+          return Math.round(d - 0.0009 - lw / (2 * Math.PI));
+        }
+        function approxTransit(Ht, lw, n) {
+          return 0.0009 + (Ht + lw) / (2 * Math.PI) + n;
+        }
+        function solarTransitJ(ds, M, L) {
+          return J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+        }
+        function hourAngle(h, phi, d) {
+          return Math.acos(
+            (Math.sin(h) - Math.sin(phi) * Math.sin(d)) /
+              (Math.cos(phi) * Math.cos(d))
+          );
+        }
+        function getSetJ(h, lw, phi, dec, n, M, L) {
+          var w = hourAngle(h, phi, dec);
+          var a = approxTransit(w, lw, n);
+          return solarTransitJ(a, M, L);
+        }
+
+        var lw = rad * -lon;
+        var phi = rad * lat;
+        var d = toDays(date);
+        var n = julianCycle(d, lw);
+        var ds = approxTransit(0, lw, n);
+        var M = solarMeanAnomaly(ds);
+        var L = eclipticLongitude(M);
+        var dec = declination(L, 0);
+        var Jnoon = solarTransitJ(ds, M, L);
+        var h0 = rad * -0.833;
+        var Jset = getSetJ(h0, lw, phi, dec, n, M, L);
+        var Jrise = Jnoon - (Jset - Jnoon);
+
+        return {
+          sunrise: fromJulian(Jrise),
+          sunset: fromJulian(Jset),
+        };
+      }
+
+      function fallbackSunTimes(date) {
+        var sunrise = new Date(date);
+        sunrise.setHours(6, 0, 0, 0);
+        var sunset = new Date(date);
+        sunset.setHours(18, 0, 0, 0);
+        return { sunrise: sunrise, sunset: sunset };
+      }
+
+      function updateThemeLabel() {
+        var modeLabel =
+          vm.theme.mode === "auto"
+            ? "Auto"
+            : vm.theme.mode === "light"
+            ? "Light"
+            : "Dark";
+        if (vm.theme.mode === "auto") {
+          var applied = vm.theme.applied === "dark" ? "Dark" : "Light";
+          vm.theme.buttonLabel = "Theme: " + modeLabel + " (" + applied + ")";
+        } else {
+          vm.theme.buttonLabel = "Theme: " + modeLabel;
+        }
+      }
+
+      function applyThemeClass(mode) {
+        var body = document.body;
+        body.classList.remove("theme-light", "theme-dark");
+        body.classList.add(mode === "dark" ? "theme-dark" : "theme-light");
+        applyAsync(function () {
+          vm.theme.applied = mode;
+          updateThemeLabel();
+        });
+      }
+
+      function scheduleThemeRefresh() {
+        if (vm.themeTimer) {
+          $timeout.cancel(vm.themeTimer);
+        }
+        vm.themeTimer = $timeout(function () {
+          if (vm.theme.mode === "auto") {
+            applyThemeMode();
+          }
+        }, 10 * 60 * 1000);
+      }
+
+      function applyThemeMode() {
+        if (vm.theme.mode === "light") {
+          applyThemeClass("light");
+          return;
+        }
+        if (vm.theme.mode === "dark") {
+          applyThemeClass("dark");
+          return;
+        }
+
+        var now = new Date();
+        getCoords()
+          .then(function (coords) {
+            var times = getSunTimes(now, coords.lat, coords.lon);
+            var isDay = now >= times.sunrise && now < times.sunset;
+            applyThemeClass(isDay ? "light" : "dark");
+            scheduleThemeRefresh();
+          })
+          .catch(function () {
+            var fallback = fallbackSunTimes(now);
+            var isDay = now >= fallback.sunrise && now < fallback.sunset;
+            applyThemeClass(isDay ? "light" : "dark");
+            scheduleThemeRefresh();
+          });
+      }
+
+      vm.cycleTheme = function () {
+        var order = ["auto", "light", "dark"];
+        var currentIndex = order.indexOf(vm.theme.mode);
+        var next = order[(currentIndex + 1) % order.length];
+        vm.theme.mode = next;
+        try {
+          localStorage.setItem("themeMode", next);
+        } catch (err) {}
+        applyThemeMode();
+      };
 
       function showToast(message) {
         vm.toast.message = message;
@@ -1072,6 +1295,10 @@
           window.location.href = "/xanax";
           return;
         }
+        if (action === "training") {
+          window.location.href = "/training";
+          return;
+        }
         if (action === "bazaar") {
           window.location.href = "/bazaar";
         }
@@ -1510,6 +1737,353 @@
           });
       };
 
+      function fetchLogSeries(logId, valueKey) {
+        function extractValue(entry) {
+          var data = entry && entry.data;
+          if (typeof data === "string") {
+            try {
+              data = JSON.parse(data);
+            } catch (err) {
+              data = null;
+            }
+          }
+          var raw = data && typeof data === "object" ? data[valueKey] : null;
+          if (raw == null && entry && Object.prototype.hasOwnProperty.call(entry, valueKey)) {
+            raw = entry[valueKey];
+          }
+          if (
+            raw == null &&
+            data &&
+            typeof data === "object" &&
+            data.stats &&
+            Object.prototype.hasOwnProperty.call(data.stats, valueKey)
+          ) {
+            raw = data.stats[valueKey];
+          }
+          if (typeof raw === "string") {
+            raw = raw.replace(/,/g, "");
+          }
+          return Number(raw);
+        }
+
+        function extractLogId(entry) {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          if (entry.log != null) {
+            return entry.log;
+          }
+          if (entry.logId != null) {
+            return entry.logId;
+          }
+          if (entry.log_id != null) {
+            return entry.log_id;
+          }
+          var data = entry.data;
+          if (typeof data === "string") {
+            try {
+              data = JSON.parse(data);
+            } catch (err) {
+              data = null;
+            }
+          }
+          if (data && typeof data === "object") {
+            if (data.log != null) {
+              return data.log;
+            }
+            if (data.logId != null) {
+              return data.logId;
+            }
+            if (data.log_id != null) {
+              return data.log_id;
+            }
+          }
+          return null;
+        }
+
+        function runQuery(db, key) {
+          return new Promise(function (resolve, reject) {
+            var tx = db.transaction("logs", "readonly");
+            var store = tx.objectStore("logs");
+            var index = store.index("log");
+            var range = window.IDBKeyRange.only(key);
+            var points = [];
+            var request = index.openCursor(range);
+            request.onsuccess = function (event) {
+              var cursor = event.target.result;
+              if (!cursor) {
+                resolve(points);
+                return;
+              }
+              var entry = cursor.value;
+              var value = extractValue(entry);
+              var ts = entry && entry.timestamp;
+              if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
+                var seconds = Number(ts);
+                if (seconds > 1e12) {
+                  seconds = Math.floor(seconds / 1000);
+                }
+                var date = new Date(seconds * 1000);
+                if (!Number.isNaN(date.getTime())) {
+                  points.push({ date: date, value: value });
+                }
+              }
+              cursor.continue();
+            };
+            request.onerror = function () {
+              reject(new Error("Failed to read training logs"));
+            };
+            tx.onerror = function () {
+              reject(tx.error || new Error("Failed to read training logs"));
+            };
+          });
+        }
+
+        function runScan(db) {
+          return new Promise(function (resolve, reject) {
+            var tx = db.transaction("logs", "readonly");
+            var store = tx.objectStore("logs");
+            var points = [];
+            var request = store.openCursor();
+            request.onsuccess = function (event) {
+              var cursor = event.target.result;
+              if (!cursor) {
+                resolve(points);
+                return;
+              }
+              var entry = cursor.value;
+              var entryLog = extractLogId(entry);
+              if (String(entryLog) === String(logId)) {
+                var value = extractValue(entry);
+                var ts = entry && entry.timestamp;
+                if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
+                  var seconds = Number(ts);
+                  if (seconds > 1e12) {
+                    seconds = Math.floor(seconds / 1000);
+                  }
+                  var date = new Date(seconds * 1000);
+                  if (!Number.isNaN(date.getTime())) {
+                    points.push({ date: date, value: value });
+                  }
+                }
+              }
+              cursor.continue();
+            };
+            request.onerror = function () {
+              reject(new Error("Failed to scan training logs"));
+            };
+            tx.onerror = function () {
+              reject(tx.error || new Error("Failed to scan training logs"));
+            };
+          });
+        }
+
+        return openLogsDb().then(function (db) {
+          return Promise.all([
+            runQuery(db, logId),
+            runQuery(db, String(logId)),
+          ]).then(function (results) {
+            var combined = results[0].concat(results[1]);
+            if (!combined.length) {
+              return runScan(db);
+            }
+            var seen = {};
+            var unique = [];
+            combined.forEach(function (point) {
+              var key = point.date.getTime() + ":" + point.value;
+              if (!seen[key]) {
+                seen[key] = true;
+                unique.push(point);
+              }
+            });
+            unique.sort(function (a, b) {
+              return a.date - b.date;
+            });
+            return unique;
+          });
+        });
+      }
+
+      function drawTrainingChart(seriesList) {
+        var container = document.getElementById("trainingChart");
+        if (!container || !seriesList || !seriesList.length || !window.d3) {
+          return;
+        }
+        var d3 = window.d3;
+        d3.select(container).selectAll("*").remove();
+
+        var width = container.clientWidth || 900;
+        var height = container.clientHeight || 360;
+        var margin = { top: 24, right: 24, bottom: 44, left: 60 };
+
+        var allPoints = [];
+        seriesList.forEach(function (series) {
+          series.points.forEach(function (point) {
+            allPoints.push(point);
+          });
+        });
+        if (!allPoints.length) {
+          return;
+        }
+
+        var xExtent = d3.extent(allPoints, function (d) {
+          return d.date;
+        });
+        var xPadding = 0;
+        if (xExtent[0] && xExtent[1]) {
+          var span = xExtent[1].getTime() - xExtent[0].getTime();
+          xPadding = span * 0.1;
+        }
+        var x = d3
+          .scaleTime()
+          .domain([
+            xExtent[0],
+            xExtent[1] ? new Date(xExtent[1].getTime() + xPadding) : xExtent[1],
+          ])
+          .range([margin.left, width - margin.right]);
+
+        var y = d3
+          .scaleLinear()
+          .domain(d3.extent(allPoints, function (d) {
+            return d.value;
+          }))
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var svg = d3
+          .select(container)
+          .append("svg")
+          .attr("width", width)
+          .attr("height", height);
+
+        var tooltip = d3
+          .select(container)
+          .append("div")
+          .attr("class", "chart-tooltip")
+          .style("opacity", 0);
+
+        function showTooltip(event, text) {
+          tooltip.style("opacity", 1).text(text);
+          var bounds = container.getBoundingClientRect();
+          var xPos = event.clientX - bounds.left + 12;
+          var yPos = event.clientY - bounds.top - 24;
+          tooltip.style("left", xPos + "px").style("top", yPos + "px");
+        }
+
+        function hideTooltip() {
+          tooltip.style("opacity", 0);
+        }
+
+        svg
+          .append("g")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(
+            d3
+              .axisBottom(x)
+              .ticks(5)
+              .tickFormat(d3.timeFormat("%Y-%m-%d"))
+          )
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(d3.axisLeft(y).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        var line = d3
+          .line()
+          .x(function (d) {
+            return x(d.date);
+          })
+          .y(function (d) {
+            return y(d.value);
+          });
+
+        seriesList.forEach(function (series) {
+          if (!series.points.length) {
+            return;
+          }
+          svg
+            .append("path")
+            .datum(series.points)
+            .attr("fill", "none")
+            .attr("stroke", series.color)
+            .attr("stroke-width", 2)
+            .attr("d", line);
+
+          svg
+            .selectAll("circle.training-point")
+            .data(series.points)
+            .enter()
+            .append("circle")
+            .attr("class", "training-point")
+            .attr("data-series", series.label)
+            .attr("cx", function (d) {
+              return x(d.date);
+            })
+            .attr("cy", function (d) {
+              return y(d.value);
+            })
+            .attr("r", 3)
+            .attr("fill", series.color)
+            .on("mousemove", function (event, d) {
+              showTooltip(event, "Value: " + d.value);
+            })
+            .on("mouseleave", hideTooltip);
+        });
+      }
+
+      vm.loadTraining = function () {
+        if (!vm.user) {
+          return;
+        }
+        if (!vm.isTrainingPage) {
+          return;
+        }
+        applyAsync(function () {
+          vm.training.loading = true;
+          vm.training.empty = false;
+        });
+        Promise.all([
+          fetchLogSeries(5302, "speed_after"),
+          fetchLogSeries(5301, "defense_after"),
+          fetchLogSeries(5303, "dexterity_after"),
+          fetchLogSeries(5300, "strength_after"),
+        ])
+          .then(function (seriesResults) {
+            var seriesList = [
+              { label: "5302 speed", color: "#facc15", points: seriesResults[0] || [] },
+              { label: "5301 defense (green)", color: "#22c55e", points: seriesResults[1] || [] },
+              { label: "5303 dexterity", color: "#3b82f6", points: seriesResults[2] || [] },
+              { label: "5300 strength", color: "#ef4444", points: seriesResults[3] || [] },
+            ];
+            var hasData = seriesList.some(function (series) {
+              return series.points.length;
+            });
+            applyAsync(function () {
+              vm.training.loading = false;
+              vm.training.empty = !hasData;
+            });
+            try {
+              console.debug("Training series data", JSON.stringify(seriesList));
+            } catch (err) {
+              console.debug("Training series data (raw)", seriesList);
+            }
+            $timeout(function () {
+              drawTrainingChart(seriesList);
+            }, 0);
+          })
+          .catch(function () {
+            applyAsync(function () {
+              vm.training.loading = false;
+              vm.training.empty = true;
+            });
+          });
+      };
+
       vm.toggleXanaxLast30 = function () {
         vm.xanax.last30Only = !vm.xanax.last30Only;
         if (vm.isXanaxPage) {
@@ -1594,6 +2168,9 @@
             if (vm.isXanaxPage) {
               vm.loadXanax(vm.xanax.granularity);
             }
+            if (vm.isTrainingPage) {
+              vm.loadTraining();
+            }
           },
           function () {
             vm.user = null;
@@ -1647,15 +2224,17 @@
           vm.user = null;
           vm.disconnectBazaar();
           setMessage("Logged out", "alert-secondary");
-          if (vm.isBazaarPage) {
-            window.location.href = "/";
-          }
-          if (vm.isAdminPage) {
-            window.location.href = "/";
-          }
+          window.location.href = "/";
         });
       };
 
+      try {
+        var storedMode = localStorage.getItem("themeMode");
+        if (storedMode === "auto" || storedMode === "light" || storedMode === "dark") {
+          vm.theme.mode = storedMode;
+        }
+      } catch (err) {}
+      applyThemeMode();
       vm.fetchMe();
     });
 })();

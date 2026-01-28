@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" ng-app="app">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Training</title>
+    <link rel="stylesheet" href="/js/bootstrap.min.css" />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body ng-controller="AuthController as vm">
+    <div class="page-bg"></div>
+    <div class="container py-5 position-relative">
+      <header class="mb-4 text-center">
+        <h1 class="display-6 fw-semibold">Training</h1>
+        <p class="text-muted">Tracked stat changes from IndexedDB logs.</p>
+      </header>
+
+      <div class="status-card mb-4">
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between">
+          <div>
+            <p class="mb-1 fw-semibold">Session</p>
+            <p class="mb-0 text-muted" ng-if="!vm.user">Checking session…</p>
+            <p class="mb-0 text-muted" ng-if="vm.user">
+              Logged in as <strong>{{ vm.user.email }}</strong>
+            </p>
+          </div>
+          <%- include('partials/nav') %>
+        </div>
+      </div>
+
+      <div class="card shadow-sm" ng-if="vm.user">
+        <div class="card-body">
+          <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between mb-3">
+            <div>
+              <h2 class="h5 mb-1">Training logs</h2>
+              <p class="text-muted mb-0 training-legend">
+                <span class="legend-strength">Strength</span>
+                <span class="legend-divider"> | </span>
+                <span class="legend-speed">Speed</span>
+                <span class="legend-divider"> | </span>
+                <span class="legend-defense">Defense</span>
+                <span class="legend-divider"> | </span>
+                <span class="legend-dexterity">Dexterity</span>
+              </p>
+            </div>
+            <div class="revives-controls mt-3 mt-lg-0">
+              <button class="btn btn-outline-secondary" ng-click="vm.loadTraining()">
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div class="revives-status text-muted" ng-if="vm.training.loading">
+            Loading training data...
+          </div>
+          <div class="revives-status text-muted" ng-if="!vm.training.loading && vm.training.empty">
+            No training logs found. Click “Logs” to refresh IndexedDB.
+          </div>
+          <div id="trainingChart" class="chart-canvas"></div>
+        </div>
+      </div>
+    </div>
+
+    <%- include('partials/toast') %>
+    <%- include('partials/logs-modal') %>
+
+    <script src="/js/angular.min.js"></script>
+    <script src="/js/d3.v7.min.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

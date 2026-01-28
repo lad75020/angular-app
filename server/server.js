@@ -319,6 +319,10 @@ app.get("/xanax", async (request, reply) => {
   return reply.view("xanax.ejs");
 });
 
+app.get("/training", async (request, reply) => {
+  return reply.view("training.ejs");
+});
+
 app.setNotFoundHandler((request, reply) => {
   if (request.raw.url.startsWith("/api")) {
     reply.code(404).send({ ok: false, error: "Not found" });
