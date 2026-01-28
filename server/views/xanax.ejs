@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Revives</title>
+    <title>Xanax</title>
     <link rel="stylesheet" href="/js/bootstrap.min.css" />
     <link rel="stylesheet" href="/css/style.css" />
   </head>
@@ -11,7 +11,8 @@
     <div class="page-bg"></div>
     <div class="container py-5 position-relative">
       <header class="mb-4 text-center">
-        <h1 class="display-6 fw-semibold">Revives</h1>
+        <h1 class="display-6 fw-semibold">Xanax</h1>
+        <p class="text-muted">Daily or weekly counts for log 2290 and 2291.</p>
       </header>
 
       <div class="status-card mb-4">
@@ -31,44 +32,42 @@
         <div class="card-body">
           <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between mb-3">
             <div>
-              <h2 class="h5 mb-1">Revive activity</h2>
-              
+              <h2 class="h5 mb-1">Xanax activity</h2>
             </div>
             <div class="revives-controls mt-3 mt-lg-0">
               <select
                 class="form-select"
-                ng-model="vm.revives.granularity"
-                ng-change="vm.loadRevives(vm.revives.granularity)"
+                ng-model="vm.xanax.granularity"
+                ng-change="vm.loadXanax(vm.xanax.granularity)"
               >
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
               </select>
-              <button class="btn btn-outline-secondary" ng-click="vm.loadRevives(vm.revives.granularity)">
+              <button class="btn btn-outline-secondary" ng-click="vm.loadXanax(vm.xanax.granularity)">
                 Refresh
               </button>
               <button
                 class="btn btn-outline-primary"
-                ng-click="vm.toggleLast30()"
+                ng-click="vm.toggleXanaxLast30()"
               >
                 30 days
               </button>
             </div>
           </div>
 
-          <div class="revives-status text-muted" ng-if="vm.revives.loading">
-            Loading revive data...
+          <div class="revives-status text-muted" ng-if="vm.xanax.loading">
+            Loading xanax data...
           </div>
-          <div class="revives-status text-muted" ng-if="!vm.revives.loading && vm.revives.empty">
-            No revive logs found. Click “Logs” to refresh IndexedDB.
+          <div class="revives-status text-muted" ng-if="!vm.xanax.loading && vm.xanax.empty">
+            No xanax logs found. Click “Logs” to refresh IndexedDB.
           </div>
-          <div class="revives-status" ng-if="vm.revives.last30Only">
-            <label class="form-label mb-1">Total revives (last 30 days)</label>
-            <input class="form-control" type="text" ng-value="vm.revives.last30Total" readonly />
+          <div class="revives-status" ng-if="vm.xanax.last30Only">
+            <label class="form-label mb-1">Total xanax (last 30 days)</label>
+            <input class="form-control" type="text" ng-value="vm.xanax.last30Total" readonly />
           </div>
-          <div id="revivesChart" class="chart-canvas"></div>
+          <div id="xanaxChart" class="chart-canvas"></div>
         </div>
       </div>
-
     </div>
 
     <%- include('partials/toast') %>

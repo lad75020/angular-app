@@ -15,6 +15,7 @@
       vm.isBazaarPage = path.indexOf("/bazaar") === 0;
       vm.isAdminPage = path.indexOf("/admin") === 0;
       vm.isRevivesPage = path.indexOf("/revives") === 0;
+      vm.isXanaxPage = path.indexOf("/xanax") === 0;
       vm.items = [];
       vm.itemsById = {};
       vm.itemTypes = [];
@@ -46,7 +47,20 @@
       vm.logsExpectedTotal = null;
       vm.toast = { show: false, message: "" };
       vm.toastTimer = null;
-      vm.revives = { granularity: "daily", loading: false, empty: false };
+      vm.revives = {
+        granularity: "daily",
+        loading: false,
+        empty: false,
+        last30Only: false,
+        last30Total: 0,
+      };
+      vm.xanax = {
+        granularity: "daily",
+        loading: false,
+        empty: false,
+        last30Only: false,
+        last30Total: 0,
+      };
       vm.chart = { open: false, title: "", points: [] };
       vm.wsCredentials = { login: "", password: "" };
       vm.navAction = "";
@@ -1054,6 +1068,10 @@
           window.location.href = "/revives";
           return;
         }
+        if (action === "xanax") {
+          window.location.href = "/xanax";
+          return;
+        }
         if (action === "bazaar") {
           window.location.href = "/bazaar";
         }
@@ -1098,9 +1116,17 @@
         var height = container.clientHeight || 360;
         var margin = { top: 24, right: 24, bottom: 44, left: 60 };
 
-        var data = points.filter(function (point) {
-          return point && point.date && Number.isFinite(point.value);
-        });
+        var data = points
+          .map(function (point) {
+            return {
+              date: point.date,
+              value: Number(point.value || 0),
+              valueAlt: Number(point.valueAlt || 0),
+            };
+          })
+          .filter(function (point) {
+            return point && point.date;
+          });
         if (!data.length) {
           return;
         }
@@ -1118,7 +1144,7 @@
           .padding(0.2);
 
         var maxCount = d3.max(data, function (d) {
-          return d.value;
+          return Math.max(d.value, d.valueAlt);
         });
         if (!Number.isFinite(maxCount) || maxCount === 0) {
           maxCount = 1;
@@ -1202,25 +1228,52 @@
           .selectAll("text")
           .style("font-size", "11px");
 
-        svg
+        var series = ["success", "failure"];
+        var x1 = d3
+          .scaleBand()
+          .domain(series)
+          .range([0, x.bandwidth()])
+          .padding(0.2);
+
+        var group = svg
           .append("g")
-          .selectAll("rect")
+          .selectAll("g")
           .data(data)
           .enter()
+          .append("g")
+          .attr("transform", function (d) {
+            return "translate(" + x(d.date) + ",0)";
+          });
+
+        group
           .append("rect")
-          .attr("x", function (d) {
-            return x(d.date);
-          })
+          .attr("x", x1("success"))
           .attr("y", function (d) {
             return y(d.value);
           })
           .attr("height", function (d) {
             return y(0) - y(d.value);
           })
-          .attr("width", x.bandwidth())
+          .attr("width", x1.bandwidth())
           .attr("fill", "#2563eb")
           .on("mousemove", function (event, d) {
-            showTooltip(event, "Count: " + d.value);
+            showTooltip(event, "Successes: " + d.value);
+          })
+          .on("mouseleave", hideTooltip);
+
+        group
+          .append("rect")
+          .attr("x", x1("failure"))
+          .attr("y", function (d) {
+            return y(d.valueAlt);
+          })
+          .attr("height", function (d) {
+            return y(0) - y(d.valueAlt);
+          })
+          .attr("width", x1.bandwidth())
+          .attr("fill", "#ef4444")
+          .on("mousemove", function (event, d) {
+            showTooltip(event, "Failures: " + d.valueAlt);
           })
           .on("mouseleave", hideTooltip);
 
@@ -1255,9 +1308,44 @@
           .attr("r", 3)
           .attr("fill", "#f97316")
           .on("mousemove", function (event, d) {
-            showTooltip(event, "Total: " + d.total);
+            showTooltip(event, "Total Successes: " + d.total);
           })
           .on("mouseleave", hideTooltip);
+      }
+
+      function fetchLogCounts(logId, granularity) {
+        return openLogsDb().then(function (db) {
+          return new Promise(function (resolve, reject) {
+            var tx = db.transaction("logs", "readonly");
+            var store = tx.objectStore("logs");
+            var index = store.index("log");
+            var range = window.IDBKeyRange.only(logId);
+            var counts = {};
+            var request = index.openCursor(range);
+            request.onsuccess = function (event) {
+              var cursor = event.target.result;
+              if (!cursor) {
+                resolve(counts);
+                return;
+              }
+              var entry = cursor.value;
+              var key = getDateKey(
+                entry && entry.timestamp,
+                granularity
+              );
+              if (key) {
+                counts[key] = (counts[key] || 0) + 1;
+              }
+              cursor.continue();
+            };
+            request.onerror = function () {
+              reject(new Error("Failed to read revive logs"));
+            };
+            tx.onerror = function () {
+              reject(tx.error || new Error("Failed to read revive logs"));
+            };
+          });
+        });
       }
 
       vm.loadRevives = function (granularity) {
@@ -1274,58 +1362,166 @@
         if (granularity) {
           vm.revives.granularity = granularity;
         }
-        openLogsDb()
-          .then(function (db) {
-            return new Promise(function (resolve, reject) {
-              var tx = db.transaction("logs", "readonly");
-              var store = tx.objectStore("logs");
-              var index = store.index("log");
-              var range = window.IDBKeyRange.only(5410);
-              var counts = {};
-              var request = index.openCursor(range);
-              request.onsuccess = function (event) {
-                var cursor = event.target.result;
-                if (!cursor) {
-                  resolve(counts);
-                  return;
-                }
-                var entry = cursor.value;
-                var key = getDateKey(
-                  entry && entry.timestamp,
-                  vm.revives.granularity
-                );
-                if (key) {
-                  counts[key] = (counts[key] || 0) + 1;
-                }
-                cursor.continue();
-              };
-              request.onerror = function () {
-                reject(new Error("Failed to read revive logs"));
-              };
-              tx.onerror = function () {
-                reject(tx.error || new Error("Failed to read revive logs"));
-              };
+        Promise.all([
+          fetchLogCounts(5410, vm.revives.granularity),
+          fetchLogCounts(5415, vm.revives.granularity),
+        ])
+          .then(function (results) {
+            var countsA = results[0] || {};
+            var countsB = results[1] || {};
+            var keyMap = {};
+            Object.keys(countsA).forEach(function (key) {
+              keyMap[key] = true;
             });
-          })
-          .then(function (counts) {
-            var keys = Object.keys(counts).sort();
+            Object.keys(countsB).forEach(function (key) {
+              keyMap[key] = true;
+            });
+            var keys = Object.keys(keyMap).sort();
             var points = keys.map(function (key) {
-              return { date: key, value: counts[key] };
+              return {
+                date: key,
+                value: countsA[key] || 0,
+                valueAlt: countsB[key] || 0,
+              };
             });
+            var filteredPoints = points;
+            var total30 = 0;
+            if (vm.revives.last30Only) {
+              var now = new Date();
+              var cutoff = new Date(
+                Date.UTC(
+                  now.getUTCFullYear(),
+                  now.getUTCMonth(),
+                  now.getUTCDate() - 29
+                )
+              );
+              filteredPoints = points.filter(function (point) {
+                var parsed = new Date(point.date + "T00:00:00Z");
+                if (Number.isNaN(parsed.getTime())) {
+                  return false;
+                }
+                return parsed >= cutoff;
+              });
+              filteredPoints.forEach(function (point) {
+                total30 += point.value + point.valueAlt;
+              });
+            }
+            var empty =
+              filteredPoints.length === 0 ||
+              filteredPoints.every(function (point) {
+                return point.value === 0 && point.valueAlt === 0;
+              });
             applyAsync(function () {
               vm.revives.loading = false;
-              vm.revives.empty = points.length === 0;
+              vm.revives.empty = empty;
+              vm.revives.last30Total = total30;
             });
             $timeout(function () {
-              drawRevivesChart(points);
+              drawRevivesChart(filteredPoints);
             }, 0);
           })
           .catch(function () {
             applyAsync(function () {
               vm.revives.loading = false;
               vm.revives.empty = true;
+              vm.revives.last30Total = 0;
             });
           });
+      };
+
+      vm.loadXanax = function (granularity) {
+        if (!vm.user) {
+          return;
+        }
+        if (!vm.isXanaxPage) {
+          return;
+        }
+        applyAsync(function () {
+          vm.xanax.loading = true;
+          vm.xanax.empty = false;
+        });
+        if (granularity) {
+          vm.xanax.granularity = granularity;
+        }
+        Promise.all([
+          fetchLogCounts(2290, vm.xanax.granularity),
+          fetchLogCounts(2291, vm.xanax.granularity),
+        ])
+          .then(function (results) {
+            var countsA = results[0] || {};
+            var countsB = results[1] || {};
+            var keyMap = {};
+            Object.keys(countsA).forEach(function (key) {
+              keyMap[key] = true;
+            });
+            Object.keys(countsB).forEach(function (key) {
+              keyMap[key] = true;
+            });
+            var keys = Object.keys(keyMap).sort();
+            var points = keys.map(function (key) {
+              return {
+                date: key,
+                value: countsA[key] || 0,
+                valueAlt: countsB[key] || 0,
+              };
+            });
+            var filteredPoints = points;
+            var total30 = 0;
+            if (vm.xanax.last30Only) {
+              var now = new Date();
+              var cutoff = new Date(
+                Date.UTC(
+                  now.getUTCFullYear(),
+                  now.getUTCMonth(),
+                  now.getUTCDate() - 29
+                )
+              );
+              filteredPoints = points.filter(function (point) {
+                var parsed = new Date(point.date + "T00:00:00Z");
+                if (Number.isNaN(parsed.getTime())) {
+                  return false;
+                }
+                return parsed >= cutoff;
+              });
+              filteredPoints.forEach(function (point) {
+                total30 += point.value + point.valueAlt;
+              });
+            }
+            var empty =
+              filteredPoints.length === 0 ||
+              filteredPoints.every(function (point) {
+                return point.value === 0 && point.valueAlt === 0;
+              });
+            applyAsync(function () {
+              vm.xanax.loading = false;
+              vm.xanax.empty = empty;
+              vm.xanax.last30Total = total30;
+            });
+            $timeout(function () {
+              drawXanaxChart(filteredPoints);
+            }, 0);
+          })
+          .catch(function () {
+            applyAsync(function () {
+              vm.xanax.loading = false;
+              vm.xanax.empty = true;
+              vm.xanax.last30Total = 0;
+            });
+          });
+      };
+
+      vm.toggleXanaxLast30 = function () {
+        vm.xanax.last30Only = !vm.xanax.last30Only;
+        if (vm.isXanaxPage) {
+          vm.loadXanax(vm.xanax.granularity);
+        }
+      };
+
+      vm.toggleLast30 = function () {
+        vm.revives.last30Only = !vm.revives.last30Only;
+        if (vm.isRevivesPage) {
+          vm.loadRevives(vm.revives.granularity);
+        }
       };
 
       vm.initBazaar = function () {
@@ -1395,6 +1591,9 @@
             if (vm.isRevivesPage) {
               vm.loadRevives(vm.revives.granularity);
             }
+            if (vm.isXanaxPage) {
+              vm.loadXanax(vm.xanax.granularity);
+            }
           },
           function () {
             vm.user = null;
@@ -1460,3 +1659,120 @@
       vm.fetchMe();
     });
 })();
+      function drawXanaxChart(points) {
+        var container = document.getElementById("xanaxChart");
+        if (!container || !points || !points.length || !window.d3) {
+          return;
+        }
+        var d3 = window.d3;
+        d3.select(container).selectAll("*").remove();
+
+        var width = container.clientWidth || 900;
+        var height = container.clientHeight || 360;
+        var margin = { top: 24, right: 24, bottom: 44, left: 60 };
+
+        var data = points
+          .map(function (point) {
+            return {
+              date: point.date,
+              value: Number(point.value || 0),
+              valueAlt: Number(point.valueAlt || 0),
+            };
+          })
+          .filter(function (point) {
+            return point && point.date;
+          });
+        if (!data.length) {
+          return;
+        }
+
+        data.sort(function (a, b) {
+          return a.date.localeCompare(b.date);
+        });
+        var labels = data.map(function (point) {
+          return point.date;
+        });
+        var x = d3
+          .scaleBand()
+          .domain(labels)
+          .range([margin.left, width - margin.right])
+          .padding(0.2);
+
+        var maxCount = d3.max(data, function (d) {
+          return Math.max(d.value, d.valueAlt);
+        });
+        if (!Number.isFinite(maxCount) || maxCount === 0) {
+          maxCount = 1;
+        }
+        var y = d3
+          .scaleLinear()
+          .domain([0, maxCount])
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var svg = d3
+          .select(container)
+          .append("svg")
+          .attr("width", width)
+          .attr("height", height);
+
+        var step = Math.ceil(labels.length / 6);
+        var tickValues = labels.filter(function (_, index) {
+          return index % step === 0;
+        });
+
+        svg
+          .append("g")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(d3.axisBottom(x).tickValues(tickValues))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(d3.axisLeft(y).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        var series = ["2290", "2291"];
+        var x1 = d3
+          .scaleBand()
+          .domain(series)
+          .range([0, x.bandwidth()])
+          .padding(0.2);
+
+        var group = svg
+          .append("g")
+          .selectAll("g")
+          .data(data)
+          .enter()
+          .append("g")
+          .attr("transform", function (d) {
+            return "translate(" + x(d.date) + ",0)";
+          });
+
+        group
+          .append("rect")
+          .attr("x", x1("2290"))
+          .attr("y", function (d) {
+            return y(d.value);
+          })
+          .attr("height", function (d) {
+            return y(0) - y(d.value);
+          })
+          .attr("width", x1.bandwidth())
+          .attr("fill", "#2563eb");
+
+        group
+          .append("rect")
+          .attr("x", x1("2291"))
+          .attr("y", function (d) {
+            return y(d.valueAlt);
+          })
+          .attr("height", function (d) {
+            return y(0) - y(d.valueAlt);
+          })
+          .attr("width", x1.bandwidth())
+          .attr("fill", "#ef4444");
+      }
