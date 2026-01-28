@@ -2006,7 +2006,12 @@
           if (!series.points.length) {
             return;
           }
-          svg
+          var seriesGroup = svg
+            .append("g")
+            .attr("class", "training-series")
+            .attr("data-series", series.label);
+
+          seriesGroup
             .append("path")
             .datum(series.points)
             .attr("fill", "none")
@@ -2014,7 +2019,7 @@
             .attr("stroke-width", 2)
             .attr("d", line);
 
-          svg
+          seriesGroup
             .selectAll("circle.training-point")
             .data(series.points)
             .enter()
