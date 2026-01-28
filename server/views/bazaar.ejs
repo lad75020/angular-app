@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" ng-app="app">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bazaar Items</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body ng-controller="AuthController as vm">
+    <div class="page-bg"></div>
+    <div class="container py-5 position-relative">
+      <header class="mb-4 text-center">
+        <h1 class="display-6 fw-semibold">Bazaar Items</h1>
+        <p class="text-muted">Search items and update live bazaar prices.</p>
+      </header>
+
+      <div class="status-card mb-4">
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between">
+          <div>
+            <p class="mb-1 fw-semibold">Session</p>
+            <p class="mb-0 text-muted" ng-if="!vm.user">Checking session…</p>
+            <p class="mb-0 text-muted" ng-if="vm.user">
+              Logged in as <strong>{{ vm.user.email }}</strong>
+            </p>
+          </div>
+          <%- include('partials/nav') %>
+        </div>
+      </div>
+
+      <div class="bazaar-panel" ng-if="vm.user">
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between mb-3">
+          <div>
+            <h2 class="h5 mb-1">Bazaar Items</h2>
+            <p class="text-muted mb-0">Search items and hover for descriptions.</p>
+          </div>
+          <div class="bazaar-status mt-3 mt-lg-0">
+            <span class="badge" ng-class="vm.statusClass(vm.bazaarStatus.items)">
+              Items WS: {{ vm.bazaarStatus.items }}
+            </span>
+            <span class="badge ms-2" ng-class="vm.statusClass(vm.bazaarStatus.prices)">
+              Prices WS: {{ vm.bazaarStatus.prices }}
+            </span>
+          </div>
+        </div>
+        <div class="bazaar-controls">
+          <input
+            type="text"
+            class="form-control"
+            placeholder="Search by name or id"
+            ng-model="vm.bazaarQuery"
+          />
+          <select
+            class="form-select bazaar-type"
+            ng-model="vm.selectedType"
+            ng-options="type for type in vm.itemTypes"
+          ></select>
+          <button
+            class="btn btn-outline-secondary btn-sm"
+            ng-click="vm.clearSearch()"
+            ng-disabled="!vm.bazaarQuery"
+          >
+            Clear
+          </button>
+        </div>
+        <div class="bazaar-meta text-muted">
+          Total items loaded: <strong>{{ vm.items.length }}</strong>
+        </div>
+        <div class="bazaar-dropdown">
+          <div class="bazaar-empty" ng-if="!vm.items.length && !vm.itemsError">
+            <div class="spinner-border text-secondary" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+          </div>
+          <div class="bazaar-empty text-danger" ng-if="vm.itemsError">
+            {{ vm.itemsError }}
+          </div>
+          <div
+            class="bazaar-item"
+            ng-repeat="item in vm.items | filter:vm.itemFilter track by item.id"
+          >
+            <div class="bazaar-thumb">
+              <img ng-if="vm.itemImageSrc(item)" ng-src="{{ vm.itemImageSrc(item) }}" alt="" />
+              <div class="bazaar-thumb-fallback" ng-if="!vm.itemImageSrc(item)">
+                ?
+              </div>
+            </div>
+            <div class="bazaar-details">
+              <div class="bazaar-name">{{ item.name }}</div>
+              <div class="bazaar-id">ID {{ item.id }}</div>
+            </div>
+            <div class="bazaar-price">{{ vm.formatPrice(item) }}</div>
+            <button class="btn btn-sm btn-outline-primary bazaar-update" ng-click="vm.updatePrice(item)">
+              Update
+            </button>
+            <button
+              class="btn btn-sm btn-outline-secondary bazaar-chart"
+              ng-click="vm.openPriceChart(item)"
+              ng-disabled="item.chartLoading || vm.priceHistoryUnavailable[item.id]"
+              ng-class="{ 'is-disabled': vm.priceHistoryUnavailable[item.id] }"
+            >
+              <span ng-if="!item.chartLoading">Chart</span>
+              <span ng-if="item.chartLoading">Loading...</span>
+            </button>
+            <div class="bazaar-tooltip" ng-if="item.description">
+              {{ item.description }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <%- include('partials/toast') %>
+    <%- include('partials/logs-modal') %>
+
+    <div class="chart-backdrop" ng-if="vm.chart.open"></div>
+    <div class="chart-modal" ng-if="vm.chart.open" ng-click="vm.closeChart()">
+      <div class="chart-card" ng-click="$event.stopPropagation()">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">{{ vm.chart.title }}</div>
+            <div class="chart-subtitle text-muted">Daily average prices</div>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" ng-click="vm.closeChart()">
+            Close
+          </button>
+        </div>
+        <canvas id="priceChart" width="760" height="360"></canvas>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/angular@1.8.3/angular.min.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

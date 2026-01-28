@@ -1,0 +1,12 @@
+<div class="logs-modal-backdrop" ng-if="vm.logsLoading"></div>
+<div class="logs-modal" ng-if="vm.logsLoading" aria-modal="true" role="dialog">
+  <div class="logs-modal-card">
+    <div class="spinner-border text-primary spinner-lg" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="mb-3 mt-3">Fetching logs…</p>
+    <button class="btn btn-outline-secondary" ng-click="vm.cancelLogsFetch()">
+      Close
+    </button>
+  </div>
+</div>

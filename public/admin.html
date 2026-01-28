@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" ng-app="app">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket Credentials</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body ng-controller="AuthController as vm">
+    <div class="page-bg"></div>
+    <div class="container py-5 position-relative">
+      <header class="mb-4 text-center">
+        <h1 class="display-6 fw-semibold">Admin: WebSocket Credentials</h1>
+        <p class="text-muted">Store the login and password used by the WS client.</p>
+      </header>
+
+      <div class="status-card mb-4">
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between">
+          <div>
+            <p class="mb-1 fw-semibold">Session</p>
+            <p class="mb-0 text-muted" ng-if="!vm.user">Checking session…</p>
+            <p class="mb-0 text-muted" ng-if="vm.user">
+              Logged in as <strong>{{ vm.user.email }}</strong>
+            </p>
+          </div>
+          <div class="mt-3 mt-lg-0">
+            <select
+              class="form-select nav-select"
+              ng-model="vm.navAction"
+              ng-change="vm.handleNav()"
+            >
+              <option value="" disabled>Menu</option>
+              <option value="bazaar">Bazaar</option>
+              <option value="admin">Admin</option>
+              <option value="logs">Logs</option>
+              <option value="logout">Log out</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm" ng-if="vm.user">
+        <div class="card-body">
+          <h2 class="h5 mb-3">WebSocket Login</h2>
+          <form ng-submit="vm.saveWsCredentials()" novalidate>
+            <div class="mb-3">
+              <label class="form-label">WS Login</label>
+              <input
+                type="text"
+                class="form-control"
+                ng-model="vm.wsCredentials.login"
+                required
+              />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">WS Password</label>
+              <input
+                type="password"
+                class="form-control"
+                ng-model="vm.wsCredentials.password"
+                required
+              />
+            </div>
+            <button class="btn btn-primary" type="submit">
+              Save credentials
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="alert mt-3" ng-class="vm.alertClass" ng-if="vm.message">
+        {{ vm.message }}
+      </div>
+    </div>
+
+    <div class="toast-host" ng-if="vm.toast.show">
+      <div class="toast-card">
+        {{ vm.toast.message }}
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/angular@1.8.3/angular.min.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

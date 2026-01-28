@@ -1,0 +1,290 @@
+body {
+  background: #f4f6fb;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+.page-bg {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at top left, #dfe8ff, transparent 60%),
+    radial-gradient(circle at bottom right, #ffe6d3, transparent 55%);
+  z-index: 0;
+}
+
+.container {
+  z-index: 1;
+}
+
+.status-card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+
+.bazaar-panel {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+
+.bazaar-status .badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.bazaar-controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.bazaar-controls .form-control {
+  flex: 1;
+}
+
+.bazaar-controls .form-select {
+  width: 180px;
+}
+
+.nav-select {
+  min-width: 180px;
+}
+
+.bazaar-meta {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.bazaar-dropdown {
+  margin-top: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  max-height: 420px;
+  overflow-y: auto;
+  background: #f9fafb;
+}
+
+.bazaar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  background: #ffffff;
+  transition: background 0.15s ease;
+}
+
+.bazaar-item:last-child {
+  border-bottom: none;
+}
+
+.bazaar-item:hover {
+  background: #f1f5f9;
+}
+
+.bazaar-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 0.75rem;
+  background: #eef2ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.bazaar-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.bazaar-thumb-fallback {
+  font-weight: 700;
+  color: #64748b;
+}
+
+.bazaar-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.bazaar-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.bazaar-id {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.bazaar-price {
+  font-weight: 700;
+  color: #0f766e;
+  white-space: nowrap;
+}
+
+.bazaar-update {
+  white-space: nowrap;
+}
+
+.bazaar-chart {
+  white-space: nowrap;
+}
+
+.bazaar-chart.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bazaar-empty {
+  padding: 1.5rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.bazaar-tooltip {
+  position: absolute;
+  left: 80px;
+  top: 100%;
+  transform: translateY(6px);
+  opacity: 0;
+  pointer-events: none;
+  background: #1f2937;
+  color: #f8fafc;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.6rem;
+  max-width: 320px;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
+  z-index: 10;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.bazaar-item:hover .bazaar-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chart-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  z-index: 20;
+}
+
+.chart-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 1.5rem;
+}
+
+.chart-card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+  width: min(900px, 100%);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.2);
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.chart-title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.chart-subtitle {
+  font-size: 0.85rem;
+}
+
+.toast-host {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 50;
+}
+
+.toast-card {
+  background: #111827;
+  color: #f8fafc;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.3);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.logs-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 80;
+}
+
+.logs-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+}
+
+.logs-modal-card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.2);
+}
+
+.spinner-lg {
+  width: 4rem;
+  height: 4rem;
+}
+
+.revives-controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.revives-status {
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 768px) {
+  .chart-card canvas {
+    width: 100%;
+    height: 240px;
+  }
+}
+
+@media (max-width: 768px) {
+  .bazaar-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .bazaar-price {
+    font-size: 0.85rem;
+  }
+}
