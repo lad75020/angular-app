@@ -29,6 +29,8 @@
       vm.wsToken = "";
       vm.wsTokenPromise = null;
       vm.wsAuthFailed = false;
+      vm.wsActivity = { items: false, prices: false };
+      vm.wsActivityTimers = { items: null, prices: null };
       vm.priceHistoryCache = {};
       vm.priceHistoryUnavailable = {};
       vm.pendingChartItemId = null;
@@ -41,6 +43,7 @@
       vm.logsRequestId = null;
       vm.logsPending = false;
       vm.logsReceivedCount = 0;
+      vm.logsExpectedTotal = null;
       vm.toast = { show: false, message: "" };
       vm.toastTimer = null;
       vm.revives = { granularity: "daily", loading: false, empty: false };
@@ -179,6 +182,7 @@
         vm.logsLoading = true;
         vm.logsRequestId = "logs-" + Date.now();
         vm.logsReceivedCount = 0;
+        vm.logsExpectedTotal = null;
         deleteLogsDb()
           .then(function () {
             return openLogsDb();
@@ -215,12 +219,14 @@
         var description = raw.description || raw.desc || raw.tooltip || "";
         var img64 = raw.img64 || raw.image64 || raw.image || raw.img || "";
         var type = raw.type || raw.itemType || raw.category || raw.group || "";
+        var circulation = raw.circulation || raw.circ || raw.stock || null;
         return {
           id: typeof id === "string" ? Number(id) || id : id,
           name: name,
           description: description,
           img64: img64,
           type: type,
+          circulation: circulation,
           price: raw.price || raw.minBazaar || raw.marketValue || null,
         };
       }
@@ -262,6 +268,32 @@
             return "bg-secondary";
         }
       };
+
+      vm.statusDotClass = function (status) {
+        switch (status) {
+          case "connected":
+            return "ws-dot-green";
+          case "connecting":
+            return "ws-dot-orange";
+          case "error":
+            return "ws-dot-red";
+          default:
+            return "ws-dot-red";
+        }
+      };
+
+      function flashActivity(key) {
+        if (!vm.wsActivity.hasOwnProperty(key)) {
+          return;
+        }
+        vm.wsActivity[key] = true;
+        if (vm.wsActivityTimers[key]) {
+          $timeout.cancel(vm.wsActivityTimers[key]);
+        }
+        vm.wsActivityTimers[key] = $timeout(function () {
+          vm.wsActivity[key] = false;
+        }, 600);
+      }
 
       function formatDateLabel(value) {
         if (!value) {
@@ -375,106 +407,136 @@
       }
 
       function drawChart(points) {
-        var canvas = document.getElementById("priceChart");
-        if (!canvas || !points || !points.length) {
+        var container = document.getElementById("priceChart");
+        if (!container || !points || !points.length || !window.d3) {
           return;
         }
-        var ctx = canvas.getContext("2d");
-        var width = canvas.width;
-        var height = canvas.height;
+        var d3 = window.d3;
+        d3.select(container).selectAll("*").remove();
+
+        var width = container.clientWidth || 760;
+        var height = container.clientHeight || 360;
         var margin = { top: 24, right: 24, bottom: 44, left: 60 };
-        var chartWidth = width - margin.left - margin.right;
-        var chartHeight = height - margin.top - margin.bottom;
 
-        ctx.clearRect(0, 0, width, height);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, width, height);
-
-        var values = points.map(function (point) {
-          return point.value;
-        });
-        var min = Math.min.apply(null, values);
-        var max = Math.max.apply(null, values);
-        if (min === max) {
-          min = min - 1;
-          max = max + 1;
-        }
-
-        ctx.strokeStyle = "#e2e8f0";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(margin.left, margin.top);
-        ctx.lineTo(margin.left, margin.top + chartHeight);
-        ctx.lineTo(margin.left + chartWidth, margin.top + chartHeight);
-        ctx.stroke();
-
-        var ticks = 4;
-        ctx.fillStyle = "#64748b";
-        ctx.font = "12px Segoe UI, system-ui, sans-serif";
-        for (var i = 0; i <= ticks; i += 1) {
-          var yValue = min + ((max - min) * i) / ticks;
-          var yPos =
-            margin.top + chartHeight - (chartHeight * i) / ticks;
-          ctx.fillText(
-            "$" + Math.round(yValue).toLocaleString(),
-            10,
-            yPos + 4
-          );
-          ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
-          ctx.beginPath();
-          ctx.moveTo(margin.left, yPos);
-          ctx.lineTo(margin.left + chartWidth, yPos);
-          ctx.stroke();
-        }
-
-        var stepX = points.length > 1 ? chartWidth / (points.length - 1) : 0;
-        ctx.strokeStyle = "#0f766e";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        points.forEach(function (point, index) {
-          var x = margin.left + stepX * index;
-          var y =
-            margin.top +
-            chartHeight -
-            ((point.value - min) / (max - min)) * chartHeight;
-          if (index === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+        function normalizeDate(value) {
+          if (!value) {
+            return null;
           }
-        });
-        ctx.stroke();
-
-        ctx.fillStyle = "#0f766e";
-        points.forEach(function (point, index) {
-          var x = margin.left + stepX * index;
-          var y =
-            margin.top +
-            chartHeight -
-            ((point.value - min) / (max - min)) * chartHeight;
-          ctx.beginPath();
-          ctx.arc(x, y, 3, 0, Math.PI * 2);
-          ctx.fill();
-        });
-
-        ctx.fillStyle = "#475569";
-        ctx.font = "11px Segoe UI, system-ui, sans-serif";
-        if (points.length) {
-          var first = points[0];
-          var mid = points[Math.floor(points.length / 2)];
-          var last = points[points.length - 1];
-          ctx.fillText(formatDateLabel(first.date), margin.left, height - 14);
-          ctx.fillText(
-            formatDateLabel(mid.date),
-            margin.left + chartWidth / 2 - 20,
-            height - 14
-          );
-          ctx.fillText(
-            formatDateLabel(last.date),
-            margin.left + chartWidth - 70,
-            height - 14
-          );
+          if (typeof value === "string" && /^\d{8}$/.test(value)) {
+            var year = Number(value.slice(0, 4));
+            var month = Number(value.slice(4, 6)) - 1;
+            var day = Number(value.slice(6, 8));
+            var compactDate = new Date(Date.UTC(year, month, day));
+            return Number.isNaN(compactDate.getTime()) ? null : compactDate;
+          }
+          if (typeof value === "number") {
+            var ms = value > 1e12 ? value : value * 1000;
+            var dNum = new Date(ms);
+            return Number.isNaN(dNum.getTime()) ? null : dNum;
+          }
+          var parsed = new Date(value);
+          if (!Number.isNaN(parsed.getTime())) {
+            return parsed;
+          }
+          var tryDate = d3.timeParse("%Y-%m-%d")(value);
+          return tryDate || null;
         }
+
+        var data = points
+          .map(function (point) {
+            return {
+              date: normalizeDate(point.date),
+              value: point.value,
+            };
+          })
+          .filter(function (point) {
+            return point.date && Number.isFinite(point.value);
+          });
+        if (!data.length) {
+          return;
+        }
+
+        var x = d3
+          .scaleTime()
+          .domain(d3.extent(data, function (d) {
+            return d.date;
+          }))
+          .range([margin.left, width - margin.right]);
+
+        var min = d3.min(data, function (d) {
+          return d.value;
+        });
+        var max = d3.max(data, function (d) {
+          return d.value;
+        });
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+          return;
+        }
+        if (min === max) {
+          min = min * 0.95;
+          max = max * 1.05;
+        }
+        var y = d3
+          .scaleLinear()
+          .domain([min, max])
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var svg = d3
+          .select(container)
+          .append("svg")
+          .attr("width", width)
+          .attr("height", height);
+
+        svg
+          .append("g")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(
+            d3
+              .axisBottom(x)
+              .ticks(4)
+              .tickFormat(d3.timeFormat("%Y-%m-%d"))
+          )
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(d3.axisLeft(y).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        var line = d3
+          .line()
+          .x(function (d) {
+            return x(d.date);
+          })
+          .y(function (d) {
+            return y(d.value);
+          });
+
+        svg
+          .append("path")
+          .datum(data)
+          .attr("fill", "none")
+          .attr("stroke", "#0f766e")
+          .attr("stroke-width", 2)
+          .attr("d", line);
+
+        svg
+          .selectAll("circle")
+          .data(data)
+          .enter()
+          .append("circle")
+          .attr("cx", function (d) {
+            return x(d.date);
+          })
+          .attr("cy", function (d) {
+            return y(d.value);
+          })
+          .attr("r", 3)
+          .attr("fill", "#0f766e");
       }
 
       function showChart(item, points) {
@@ -640,6 +702,7 @@
             }
             return;
           }
+          flashActivity("items");
           if (payload.type === "getAllTornItems") {
             if (payload.ok && Array.isArray(payload.items)) {
               var normalized = payload.items
@@ -671,7 +734,6 @@
               });
             }
           } else if (payload.type === "dailyPriceAveragesAll") {
-            console.log("[dailyPriceAveragesAll] payload:", payload);
             var pendingId = vm.pendingChartItemId;
             if (payload.ok === false) {
               vm.dailyAveragesLoading = false;
@@ -734,11 +796,20 @@
               setMessage(payload.error, "alert-danger");
               return;
             }
+            if (payload.phase === "end") {
+              vm.logsLoading = false;
+              vm.logsRequestId = null;
+              showToast("Logs fetched: " + vm.logsReceivedCount);
+              return;
+            }
             if (payload.phase !== "batch") {
               return;
             }
             var sentCount = Number(payload.sent);
             var totalCount = Number(payload.total);
+            if (Number.isFinite(totalCount) && totalCount > 0) {
+              vm.logsExpectedTotal = totalCount;
+            }
             var isDone =
               Number.isFinite(sentCount) &&
               Number.isFinite(totalCount) &&
@@ -748,11 +819,14 @@
             vm.logsReceivedCount += batchEntries.length;
             addLogsBatch(batchEntries)
               .then(function () {
-                if (isDone) {
+                if (
+                  isDone ||
+                  (Number.isFinite(vm.logsExpectedTotal) &&
+                    vm.logsReceivedCount >= vm.logsExpectedTotal)
+                ) {
                   vm.logsLoading = false;
                   vm.logsRequestId = null;
-                  setMessage("Logs stored in IndexedDB.", "alert-success");
-                  showToast("Logs received: " + vm.logsReceivedCount);
+                  showToast("Logs fetched: " + vm.logsReceivedCount);
                 }
               })
               .catch(function () {
@@ -839,6 +913,7 @@
           } catch (err) {
             return;
           }
+          flashActivity("prices");
           if (payload.type === "priceUpdate" || typeof payload.itemId !== "undefined") {
             handlePriceUpdate(payload);
           }
@@ -1012,81 +1087,177 @@
       }
 
       function drawRevivesChart(points) {
-        var canvas = document.getElementById("revivesChart");
-        if (!canvas) {
+        var container = document.getElementById("revivesChart");
+        if (!container || !points || !points.length || !window.d3) {
           return;
         }
-        var ctx = canvas.getContext("2d");
-        var width = canvas.width;
-        var height = canvas.height;
-        ctx.clearRect(0, 0, width, height);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, width, height);
-        if (!points || !points.length) {
-          return;
-        }
+        var d3 = window.d3;
+        d3.select(container).selectAll("*").remove();
 
+        var width = container.clientWidth || 900;
+        var height = container.clientHeight || 360;
         var margin = { top: 24, right: 24, bottom: 44, left: 60 };
-        var chartWidth = width - margin.left - margin.right;
-        var chartHeight = height - margin.top - margin.bottom;
 
-        var values = points.map(function (point) {
-          return point.value;
+        var data = points.filter(function (point) {
+          return point && point.date && Number.isFinite(point.value);
         });
-        var min = 0;
-        var max = Math.max.apply(null, values);
-        if (!Number.isFinite(max) || max === 0) {
-          max = 1;
+        if (!data.length) {
+          return;
         }
 
-        ctx.strokeStyle = "#e2e8f0";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(margin.left, margin.top);
-        ctx.lineTo(margin.left, margin.top + chartHeight);
-        ctx.lineTo(margin.left + chartWidth, margin.top + chartHeight);
-        ctx.stroke();
+        data.sort(function (a, b) {
+          return a.date.localeCompare(b.date);
+        });
+        var labels = data.map(function (point) {
+          return point.date;
+        });
+        var x = d3
+          .scaleBand()
+          .domain(labels)
+          .range([margin.left, width - margin.right])
+          .padding(0.2);
 
-        var ticks = 4;
-        ctx.fillStyle = "#64748b";
-        ctx.font = "12px Segoe UI, system-ui, sans-serif";
-        for (var i = 0; i <= ticks; i += 1) {
-          var yValue = (max * i) / ticks;
-          var yPos =
-            margin.top + chartHeight - (chartHeight * i) / ticks;
-          ctx.fillText(String(Math.round(yValue)), 12, yPos + 4);
-          ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
-          ctx.beginPath();
-          ctx.moveTo(margin.left, yPos);
-          ctx.lineTo(margin.left + chartWidth, yPos);
-          ctx.stroke();
+        var maxCount = d3.max(data, function (d) {
+          return d.value;
+        });
+        if (!Number.isFinite(maxCount) || maxCount === 0) {
+          maxCount = 1;
+        }
+        var cumulative = [];
+        var runningTotal = 0;
+        data.forEach(function (point) {
+          runningTotal += point.value;
+          cumulative.push({ date: point.date, total: runningTotal });
+        });
+        var maxTotal = d3.max(cumulative, function (d) {
+          return d.total;
+        });
+        if (!Number.isFinite(maxTotal) || maxTotal === 0) {
+          maxTotal = 1;
         }
 
-        var barCount = points.length;
-        var barGap = 6;
-        var barWidth = barCount ? chartWidth / barCount - barGap : chartWidth;
-        if (barWidth < 2) {
-          barWidth = 2;
+        var y = d3
+          .scaleLinear()
+          .domain([0, maxCount])
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var yTotal = d3
+          .scaleLinear()
+          .domain([0, maxTotal])
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var svg = d3
+          .select(container)
+          .append("svg")
+          .attr("width", width)
+          .attr("height", height);
+
+        var tooltip = d3
+          .select(container)
+          .append("div")
+          .attr("class", "chart-tooltip")
+          .style("opacity", 0);
+
+        function showTooltip(event, text) {
+          tooltip
+            .style("opacity", 1)
+            .text(text);
+          var bounds = container.getBoundingClientRect();
+          var xPos = event.clientX - bounds.left + 12;
+          var yPos = event.clientY - bounds.top - 24;
+          tooltip
+            .style("left", xPos + "px")
+            .style("top", yPos + "px");
         }
 
-        ctx.fillStyle = "#2563eb";
-        points.forEach(function (point, index) {
-          var x = margin.left + index * (barWidth + barGap) + barGap / 2;
-          var barHeight = (point.value / max) * chartHeight;
-          var y = margin.top + chartHeight - barHeight;
-          ctx.fillRect(x, y, barWidth, barHeight);
+        function hideTooltip() {
+          tooltip.style("opacity", 0);
+        }
+
+        var step = Math.ceil(labels.length / 6);
+        var tickValues = labels.filter(function (_, index) {
+          return index % step === 0;
         });
 
-        ctx.fillStyle = "#475569";
-        ctx.font = "11px Segoe UI, system-ui, sans-serif";
-        if (points.length) {
-          var first = points[0];
-          var mid = points[Math.floor(points.length / 2)];
-          var last = points[points.length - 1];
-          ctx.fillText(first.date, margin.left, height - 14);
-          ctx.fillText(mid.date, margin.left + chartWidth / 2 - 20, height - 14);
-          ctx.fillText(last.date, margin.left + chartWidth - 70, height - 14);
-        }
+        svg
+          .append("g")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(d3.axisBottom(x).tickValues(tickValues))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(d3.axisLeft(y).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + (width - margin.right) + ",0)")
+          .call(d3.axisRight(yTotal).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .selectAll("rect")
+          .data(data)
+          .enter()
+          .append("rect")
+          .attr("x", function (d) {
+            return x(d.date);
+          })
+          .attr("y", function (d) {
+            return y(d.value);
+          })
+          .attr("height", function (d) {
+            return y(0) - y(d.value);
+          })
+          .attr("width", x.bandwidth())
+          .attr("fill", "#2563eb")
+          .on("mousemove", function (event, d) {
+            showTooltip(event, "Count: " + d.value);
+          })
+          .on("mouseleave", hideTooltip);
+
+        var line = d3
+          .line()
+          .x(function (d) {
+            return x(d.date) + x.bandwidth() / 2;
+          })
+          .y(function (d) {
+            return yTotal(d.total);
+          });
+
+        svg
+          .append("path")
+          .datum(cumulative)
+          .attr("fill", "none")
+          .attr("stroke", "#f97316")
+          .attr("stroke-width", 2)
+          .attr("d", line);
+
+        svg
+          .selectAll("circle")
+          .data(cumulative)
+          .enter()
+          .append("circle")
+          .attr("cx", function (d) {
+            return x(d.date) + x.bandwidth() / 2;
+          })
+          .attr("cy", function (d) {
+            return yTotal(d.total);
+          })
+          .attr("r", 3)
+          .attr("fill", "#f97316")
+          .on("mousemove", function (event, d) {
+            showTooltip(event, "Total: " + d.total);
+          })
+          .on("mouseleave", hideTooltip);
       }
 
       vm.loadRevives = function (granularity) {
