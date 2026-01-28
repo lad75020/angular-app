@@ -323,6 +323,10 @@ app.get("/training", async (request, reply) => {
   return reply.view("training.ejs");
 });
 
+app.get("/crime-skills", async (request, reply) => {
+  return reply.view("crime-skills.ejs");
+});
+
 app.setNotFoundHandler((request, reply) => {
   if (request.raw.url.startsWith("/api")) {
     reply.code(404).send({ ok: false, error: "Not found" });

@@ -17,6 +17,7 @@
       vm.isRevivesPage = path.indexOf("/revives") === 0;
       vm.isXanaxPage = path.indexOf("/xanax") === 0;
       vm.isTrainingPage = path.indexOf("/training") === 0;
+      vm.isCrimeSkillsPage = path.indexOf("/crime-skills") === 0;
       vm.items = [];
       vm.itemsById = {};
       vm.itemTypes = [];
@@ -63,6 +64,7 @@
         last30Total: 0,
       };
       vm.training = { loading: false, empty: false };
+      vm.crimeSkills = { loading: false, empty: false, series: [] };
       vm.theme = {
         mode: "auto",
         applied: "light",
@@ -727,6 +729,42 @@
 
         svg
           .append("g")
+          .attr("class", "crime-grid crime-grid-x")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(
+            d3
+              .axisBottom(x)
+              .ticks(5)
+              .tickSize(-(height - margin.top - margin.bottom))
+              .tickFormat("")
+          )
+          .call(function (g) {
+            g.selectAll(".tick line")
+              .attr("stroke", "#272b34")
+              .attr("stroke-opacity", 1);
+            g.select(".domain").remove();
+          });
+
+        svg
+          .append("g")
+          .attr("class", "crime-grid crime-grid-y")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(
+            d3
+              .axisLeft(y)
+              .ticks(4)
+              .tickSize(-(width - margin.left - margin.right))
+              .tickFormat("")
+          )
+          .call(function (g) {
+            g.selectAll(".tick line")
+              .attr("stroke", "#272b34")
+              .attr("stroke-opacity", 1);
+            g.select(".domain").remove();
+          });
+
+        svg
+          .append("g")
           .attr("transform", "translate(0," + (height - margin.bottom) + ")")
           .call(
             d3
@@ -1297,6 +1335,10 @@
         }
         if (action === "training") {
           window.location.href = "/training";
+          return;
+        }
+        if (action === "crime-skills") {
+          window.location.href = "/crime-skills";
           return;
         }
         if (action === "bazaar") {
@@ -1904,6 +1946,190 @@
         });
       }
 
+      function fetchCrimeSkillsSeries(logId) {
+        function parseData(entry) {
+          var data = entry && entry.data;
+          if (typeof data === "string") {
+            try {
+              data = JSON.parse(data);
+            } catch (err) {
+              data = null;
+            }
+          }
+          return data && typeof data === "object" ? data : null;
+        }
+
+        function extractLogId(entry) {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          if (entry.log != null) {
+            return entry.log;
+          }
+          if (entry.logId != null) {
+            return entry.logId;
+          }
+          if (entry.log_id != null) {
+            return entry.log_id;
+          }
+          var data = parseData(entry);
+          if (data) {
+            if (data.log != null) {
+              return data.log;
+            }
+            if (data.logId != null) {
+              return data.logId;
+            }
+            if (data.log_id != null) {
+              return data.log_id;
+            }
+          }
+          return null;
+        }
+
+        function buildPoint(entry) {
+          var data = parseData(entry);
+          var crime = data && data.crime ? String(data.crime) : null;
+          var skillRaw =
+            data && Object.prototype.hasOwnProperty.call(data, "skill_level")
+              ? data.skill_level
+              : entry && Object.prototype.hasOwnProperty.call(entry, "skill_level")
+              ? entry.skill_level
+              : null;
+          if (crime) {
+            crime = crime.trim();
+          }
+          if (!crime) {
+            return null;
+          }
+          if (typeof skillRaw === "string") {
+            skillRaw = skillRaw.replace(/,/g, "");
+          }
+          var skill = Number(skillRaw);
+          if (!Number.isFinite(skill)) {
+            return null;
+          }
+          var ts = entry && entry.timestamp;
+          if (!Number.isFinite(Number(ts))) {
+            return null;
+          }
+          var seconds = Number(ts);
+          if (seconds > 1e12) {
+            seconds = Math.floor(seconds / 1000);
+          }
+          var date = new Date(seconds * 1000);
+          if (Number.isNaN(date.getTime())) {
+            return null;
+          }
+          return { crime: crime, date: date, value: skill, ts: seconds };
+        }
+
+        function runQuery(db, key) {
+          return new Promise(function (resolve, reject) {
+            var tx = db.transaction("logs", "readonly");
+            var store = tx.objectStore("logs");
+            var index = store.index("log");
+            var range = window.IDBKeyRange.only(key);
+            var points = [];
+            var request = index.openCursor(range);
+            request.onsuccess = function (event) {
+              var cursor = event.target.result;
+              if (!cursor) {
+                resolve(points);
+                return;
+              }
+              var point = buildPoint(cursor.value);
+              if (point) {
+                points.push(point);
+              }
+              cursor.continue();
+            };
+            request.onerror = function () {
+              reject(new Error("Failed to read crime skills logs"));
+            };
+            tx.onerror = function () {
+              reject(tx.error || new Error("Failed to read crime skills logs"));
+            };
+          });
+        }
+
+        function runScan(db) {
+          return new Promise(function (resolve, reject) {
+            var tx = db.transaction("logs", "readonly");
+            var store = tx.objectStore("logs");
+            var points = [];
+            var request = store.openCursor();
+            request.onsuccess = function (event) {
+              var cursor = event.target.result;
+              if (!cursor) {
+                resolve(points);
+                return;
+              }
+              var entry = cursor.value;
+              var entryLog = extractLogId(entry);
+              if (String(entryLog) === String(logId)) {
+                var point = buildPoint(entry);
+                if (point) {
+                  points.push(point);
+                }
+              }
+              cursor.continue();
+            };
+            request.onerror = function () {
+              reject(new Error("Failed to scan crime skills logs"));
+            };
+            tx.onerror = function () {
+              reject(tx.error || new Error("Failed to scan crime skills logs"));
+            };
+          });
+        }
+
+        function dedupe(points) {
+          var seen = {};
+          var unique = [];
+          points.forEach(function (point) {
+            var key = point.ts + ":" + point.crime + ":" + point.value;
+            if (!seen[key]) {
+              seen[key] = true;
+              unique.push(point);
+            }
+          });
+          return unique;
+        }
+
+        return openLogsDb().then(function (db) {
+          return Promise.all([
+            runQuery(db, logId),
+            runQuery(db, String(logId)),
+          ])
+            .then(function (results) {
+              var combined = results[0].concat(results[1]);
+              if (!combined.length) {
+                return runScan(db);
+              }
+              return combined;
+            })
+            .then(function (points) {
+              var unique = dedupe(points);
+              var grouped = {};
+              unique.forEach(function (point) {
+                if (!grouped[point.crime]) {
+                  grouped[point.crime] = [];
+                }
+                grouped[point.crime].push({ date: point.date, value: point.value });
+              });
+              return Object.keys(grouped)
+                .sort()
+                .map(function (label) {
+                  grouped[label].sort(function (a, b) {
+                    return a.date - b.date;
+                  });
+                  return { label: label, points: grouped[label] };
+                });
+            });
+        });
+      }
+
       function drawTrainingChart(seriesList) {
         var container = document.getElementById("trainingChart");
         if (!container || !seriesList || !seriesList.length || !window.d3) {
@@ -2041,6 +2267,143 @@
         });
       }
 
+      function drawCrimeSkillsChart(seriesList) {
+        var container = document.getElementById("crimeSkillsChart");
+        if (!container || !seriesList || !seriesList.length || !window.d3) {
+          return;
+        }
+        var d3 = window.d3;
+        d3.select(container).selectAll("*").remove();
+
+        var width = container.clientWidth || 900;
+        var height = container.clientHeight || 360;
+        var margin = { top: 24, right: 24, bottom: 44, left: 60 };
+
+        var allPoints = [];
+        seriesList.forEach(function (series) {
+          series.points.forEach(function (point) {
+            allPoints.push(point);
+          });
+        });
+        if (!allPoints.length) {
+          return;
+        }
+
+        var xExtent = d3.extent(allPoints, function (d) {
+          return d.date;
+        });
+        var xPadding = 0;
+        if (xExtent[0] && xExtent[1]) {
+          var span = xExtent[1].getTime() - xExtent[0].getTime();
+          xPadding = span * 0.1;
+        }
+        var x = d3
+          .scaleTime()
+          .domain([
+            xExtent[0],
+            xExtent[1] ? new Date(xExtent[1].getTime() + xPadding) : xExtent[1],
+          ])
+          .range([margin.left, width - margin.right]);
+
+        var y = d3
+          .scaleLinear()
+          .domain(d3.extent(allPoints, function (d) {
+            return d.value;
+          }))
+          .nice()
+          .range([height - margin.bottom, margin.top]);
+
+        var svg = d3
+          .select(container)
+          .append("svg")
+          .attr("width", width)
+          .attr("height", height);
+
+        var tooltip = d3
+          .select(container)
+          .append("div")
+          .attr("class", "chart-tooltip")
+          .style("opacity", 0);
+
+        function showTooltip(event, text) {
+          tooltip.style("opacity", 1).text(text);
+          var bounds = container.getBoundingClientRect();
+          var xPos = event.clientX - bounds.left + 12;
+          var yPos = event.clientY - bounds.top - 24;
+          tooltip.style("left", xPos + "px").style("top", yPos + "px");
+        }
+
+        function hideTooltip() {
+          tooltip.style("opacity", 0);
+        }
+
+        svg
+          .append("g")
+          .attr("transform", "translate(0," + (height - margin.bottom) + ")")
+          .call(
+            d3
+              .axisBottom(x)
+              .ticks(5)
+              .tickFormat(d3.timeFormat("%Y-%m-%d"))
+          )
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        svg
+          .append("g")
+          .attr("transform", "translate(" + margin.left + ",0)")
+          .call(d3.axisLeft(y).ticks(4))
+          .selectAll("text")
+          .style("font-size", "11px");
+
+        var line = d3
+          .line()
+          .x(function (d) {
+            return x(d.date);
+          })
+          .y(function (d) {
+            return y(d.value);
+          });
+
+        seriesList.forEach(function (series) {
+          if (!series.points.length) {
+            return;
+          }
+          var seriesGroup = svg
+            .append("g")
+            .attr("class", "crime-skill-series")
+            .attr("data-series", series.label);
+
+          seriesGroup
+            .append("path")
+            .datum(series.points)
+            .attr("fill", "none")
+            .attr("stroke", series.color)
+            .attr("stroke-width", 2)
+            .attr("d", line);
+
+          seriesGroup
+            .selectAll("circle.crime-skill-point")
+            .data(series.points)
+            .enter()
+            .append("circle")
+            .attr("class", "crime-skill-point")
+            .attr("data-series", series.label)
+            .attr("cx", function (d) {
+              return x(d.date);
+            })
+            .attr("cy", function (d) {
+              return y(d.value);
+            })
+            .attr("r", 3)
+            .attr("fill", series.color)
+            .on("mousemove", function (event, d) {
+              showTooltip(event, series.label + ": " + d.value);
+            })
+            .on("mouseleave", hideTooltip);
+        });
+      }
+
       vm.loadTraining = function () {
         if (!vm.user) {
           return;
@@ -2085,6 +2448,59 @@
             applyAsync(function () {
               vm.training.loading = false;
               vm.training.empty = true;
+            });
+          });
+      };
+
+      vm.loadCrimeSkills = function () {
+        if (!vm.user) {
+          return;
+        }
+        if (!vm.isCrimeSkillsPage) {
+          return;
+        }
+        applyAsync(function () {
+          vm.crimeSkills.loading = true;
+          vm.crimeSkills.empty = false;
+        });
+        fetchCrimeSkillsSeries(9005)
+          .then(function (seriesList) {
+            var palette = [
+              "#f97316",
+              "#22c55e",
+              "#3b82f6",
+              "#ef4444",
+              "#a855f7",
+              "#14b8a6",
+              "#facc15",
+              "#ec4899",
+              "#84cc16",
+              "#0ea5e9",
+            ];
+            var colored = (seriesList || []).map(function (series, index) {
+              return {
+                label: series.label,
+                points: series.points || [],
+                color: palette[index % palette.length],
+              };
+            });
+            var hasData = colored.some(function (series) {
+              return series.points.length;
+            });
+            applyAsync(function () {
+              vm.crimeSkills.loading = false;
+              vm.crimeSkills.empty = !hasData;
+              vm.crimeSkills.series = colored;
+            });
+            $timeout(function () {
+              drawCrimeSkillsChart(colored);
+            }, 0);
+          })
+          .catch(function () {
+            applyAsync(function () {
+              vm.crimeSkills.loading = false;
+              vm.crimeSkills.empty = true;
+              vm.crimeSkills.series = [];
             });
           });
       };
@@ -2175,6 +2591,9 @@
             }
             if (vm.isTrainingPage) {
               vm.loadTraining();
+            }
+            if (vm.isCrimeSkillsPage) {
+              vm.loadCrimeSkills();
             }
           },
           function () {
