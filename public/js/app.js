@@ -41,7 +41,6 @@
       vm.dailyAveragesRequested = false;
       vm.dailyAveragesLoaded = false;
       vm.dailyAveragesLoading = false;
-      vm.logsDbPromise = null;
       vm.logsLoading = false;
       vm.logsRequestId = null;
       vm.logsPending = false;
@@ -316,6 +315,16 @@
         }, 3000);
       }
 
+      function iterateCursor(cursorPromise, onValue) {
+        return cursorPromise.then(function loop(cursor) {
+          if (!cursor) {
+            return;
+          }
+          onValue(cursor.value);
+          return cursor.continue().then(loop);
+        });
+      }
+
       function openLogsDb() {
         if (vm.logsDbPromise) {
           return vm.logsDbPromise;
@@ -325,28 +334,31 @@
             reject(new Error("IndexedDB is not supported"));
             return;
           }
-          var request = window.indexedDB.open("logs", 3);
-          request.onupgradeneeded = function (event) {
-            var db = event.target.result;
-            if (db.objectStoreNames.contains("entries")) {
-              db.deleteObjectStore("entries");
-            }
-            if (db.objectStoreNames.contains("logs")) {
-              db.deleteObjectStore("logs");
-            }
-            var store = db.createObjectStore("logs", {
-              keyPath: "_pk",
-              autoIncrement: true,
+          if (!window.idb || typeof window.idb.openDB !== "function") {
+            reject(new Error("idb library is not loaded"));
+            return;
+          }
+          window.idb
+            .openDB("logs", 3, {
+              upgrade: function (db) {
+                if (db.objectStoreNames.contains("entries")) {
+                  db.deleteObjectStore("entries");
+                }
+                if (db.objectStoreNames.contains("logs")) {
+                  db.deleteObjectStore("logs");
+                }
+                var store = db.createObjectStore("logs", {
+                  keyPath: "_pk",
+                  autoIncrement: true,
+                });
+                store.createIndex("log", "log", { unique: false });
+                store.createIndex("timestamp", "timestamp", { unique: false });
+              },
+            })
+            .then(resolve)
+            .catch(function (err) {
+              reject(err || new Error("Failed to open IndexedDB"));
             });
-            store.createIndex("log", "log", { unique: false });
-            store.createIndex("timestamp", "timestamp", { unique: false });
-          };
-          request.onsuccess = function () {
-            resolve(request.result);
-          };
-          request.onerror = function () {
-            reject(request.error || new Error("Failed to open IndexedDB"));
-          };
         });
         return vm.logsDbPromise;
       }
@@ -357,61 +369,59 @@
             reject(new Error("IndexedDB is not supported"));
             return;
           }
+          if (!window.idb || typeof window.idb.deleteDB !== "function") {
+            reject(new Error("idb library is not loaded"));
+            return;
+          }
           if (vm.logsDbPromise) {
             vm.logsDbPromise.then(function (db) {
               db.close();
             });
             vm.logsDbPromise = null;
           }
-          var request = window.indexedDB.deleteDatabase("logs");
-          request.onsuccess = function () {
-            resolve();
-          };
-          request.onerror = function () {
-            reject(request.error || new Error("Failed to delete logs DB"));
-          };
-          request.onblocked = function () {
-            reject(new Error("Logs DB delete is blocked"));
-          };
+          window.idb
+            .deleteDB("logs", {
+              blocked: function () {
+                reject(new Error("Logs DB delete is blocked"));
+              },
+            })
+            .then(resolve)
+            .catch(function (err) {
+              reject(err || new Error("Failed to delete logs DB"));
+            });
         });
       }
 
       function clearLogsStore() {
-        return openLogsDb().then(function (db) {
-          return new Promise(function (resolve, reject) {
+        return openLogsDb()
+          .then(function (db) {
             var tx = db.transaction("logs", "readwrite");
-            tx.objectStore("logs").clear();
-            tx.oncomplete = function () {
-              resolve();
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to clear logs store"));
-            };
+            tx.store.clear();
+            return tx.done;
+          })
+          .catch(function (err) {
+            throw err || new Error("Failed to clear logs store");
           });
-        });
       }
 
       function addLogsBatch(entries) {
         if (!Array.isArray(entries) || entries.length === 0) {
           return Promise.resolve();
         }
-        return openLogsDb().then(function (db) {
-          return new Promise(function (resolve, reject) {
+        return openLogsDb()
+          .then(function (db) {
             var tx = db.transaction("logs", "readwrite");
-            var store = tx.objectStore("logs");
+            var store = tx.store;
             entries.forEach(function (entry) {
               if (entry && typeof entry === "object") {
                 store.add(entry);
               }
             });
-            tx.oncomplete = function () {
-              resolve();
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to write log batch"));
-            };
+            return tx.done;
+          })
+          .catch(function (err) {
+            throw err || new Error("Failed to write log batch");
           });
-        });
       }
 
       function beginLogsFetch() {
@@ -1583,21 +1593,14 @@
       }
 
       function fetchLogCounts(logId, granularity) {
-        return openLogsDb().then(function (db) {
-          return new Promise(function (resolve, reject) {
+        return openLogsDb()
+          .then(function (db) {
             var tx = db.transaction("logs", "readonly");
-            var store = tx.objectStore("logs");
+            var store = tx.store;
             var index = store.index("log");
             var range = window.IDBKeyRange.only(logId);
             var counts = {};
-            var request = index.openCursor(range);
-            request.onsuccess = function (event) {
-              var cursor = event.target.result;
-              if (!cursor) {
-                resolve(counts);
-                return;
-              }
-              var entry = cursor.value;
+            return iterateCursor(index.openCursor(range), function (entry) {
               var key = getDateKey(
                 entry && entry.timestamp,
                 granularity
@@ -1605,16 +1608,17 @@
               if (key) {
                 counts[key] = (counts[key] || 0) + 1;
               }
-              cursor.continue();
-            };
-            request.onerror = function () {
-              reject(new Error("Failed to read revive logs"));
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to read revive logs"));
-            };
+            })
+              .then(function () {
+                return tx.done;
+              })
+              .then(function () {
+                return counts;
+              });
+          })
+          .catch(function (err) {
+            throw err || new Error("Failed to read revive logs");
           });
-        });
       }
 
       vm.loadRevives = function (granularity) {
@@ -1844,20 +1848,43 @@
         }
 
         function runQuery(db, key) {
-          return new Promise(function (resolve, reject) {
-            var tx = db.transaction("logs", "readonly");
-            var store = tx.objectStore("logs");
-            var index = store.index("log");
-            var range = window.IDBKeyRange.only(key);
-            var points = [];
-            var request = index.openCursor(range);
-            request.onsuccess = function (event) {
-              var cursor = event.target.result;
-              if (!cursor) {
-                resolve(points);
-                return;
+          var tx = db.transaction("logs", "readonly");
+          var store = tx.store;
+          var index = store.index("log");
+          var range = window.IDBKeyRange.only(key);
+          var points = [];
+          return iterateCursor(index.openCursor(range), function (entry) {
+            var value = extractValue(entry);
+            var ts = entry && entry.timestamp;
+            if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
+              var seconds = Number(ts);
+              if (seconds > 1e12) {
+                seconds = Math.floor(seconds / 1000);
               }
-              var entry = cursor.value;
+              var date = new Date(seconds * 1000);
+              if (!Number.isNaN(date.getTime())) {
+                points.push({ date: date, value: value });
+              }
+            }
+          })
+            .then(function () {
+              return tx.done;
+            })
+            .then(function () {
+              return points;
+            })
+            .catch(function (err) {
+              throw err || new Error("Failed to read training logs");
+            });
+        }
+
+        function runScan(db) {
+          var tx = db.transaction("logs", "readonly");
+          var store = tx.store;
+          var points = [];
+          return iterateCursor(store.openCursor(), function (entry) {
+            var entryLog = extractLogId(entry);
+            if (String(entryLog) === String(logId)) {
               var value = extractValue(entry);
               var ts = entry && entry.timestamp;
               if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
@@ -1870,54 +1897,17 @@
                   points.push({ date: date, value: value });
                 }
               }
-              cursor.continue();
-            };
-            request.onerror = function () {
-              reject(new Error("Failed to read training logs"));
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to read training logs"));
-            };
-          });
-        }
-
-        function runScan(db) {
-          return new Promise(function (resolve, reject) {
-            var tx = db.transaction("logs", "readonly");
-            var store = tx.objectStore("logs");
-            var points = [];
-            var request = store.openCursor();
-            request.onsuccess = function (event) {
-              var cursor = event.target.result;
-              if (!cursor) {
-                resolve(points);
-                return;
-              }
-              var entry = cursor.value;
-              var entryLog = extractLogId(entry);
-              if (String(entryLog) === String(logId)) {
-                var value = extractValue(entry);
-                var ts = entry && entry.timestamp;
-                if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
-                  var seconds = Number(ts);
-                  if (seconds > 1e12) {
-                    seconds = Math.floor(seconds / 1000);
-                  }
-                  var date = new Date(seconds * 1000);
-                  if (!Number.isNaN(date.getTime())) {
-                    points.push({ date: date, value: value });
-                  }
-                }
-              }
-              cursor.continue();
-            };
-            request.onerror = function () {
-              reject(new Error("Failed to scan training logs"));
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to scan training logs"));
-            };
-          });
+            }
+          })
+            .then(function () {
+              return tx.done;
+            })
+            .then(function () {
+              return points;
+            })
+            .catch(function (err) {
+              throw err || new Error("Failed to scan training logs");
+            });
         }
 
         return openLogsDb().then(function (db) {
@@ -2025,63 +2015,50 @@
         }
 
         function runQuery(db, key) {
-          return new Promise(function (resolve, reject) {
-            var tx = db.transaction("logs", "readonly");
-            var store = tx.objectStore("logs");
-            var index = store.index("log");
-            var range = window.IDBKeyRange.only(key);
-            var points = [];
-            var request = index.openCursor(range);
-            request.onsuccess = function (event) {
-              var cursor = event.target.result;
-              if (!cursor) {
-                resolve(points);
-                return;
-              }
-              var point = buildPoint(cursor.value);
-              if (point) {
-                points.push(point);
-              }
-              cursor.continue();
-            };
-            request.onerror = function () {
-              reject(new Error("Failed to read crime skills logs"));
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to read crime skills logs"));
-            };
-          });
+          var tx = db.transaction("logs", "readonly");
+          var store = tx.store;
+          var index = store.index("log");
+          var range = window.IDBKeyRange.only(key);
+          var points = [];
+          return iterateCursor(index.openCursor(range), function (entry) {
+            var point = buildPoint(entry);
+            if (point) {
+              points.push(point);
+            }
+          })
+            .then(function () {
+              return tx.done;
+            })
+            .then(function () {
+              return points;
+            })
+            .catch(function (err) {
+              throw err || new Error("Failed to read crime skills logs");
+            });
         }
 
         function runScan(db) {
-          return new Promise(function (resolve, reject) {
-            var tx = db.transaction("logs", "readonly");
-            var store = tx.objectStore("logs");
-            var points = [];
-            var request = store.openCursor();
-            request.onsuccess = function (event) {
-              var cursor = event.target.result;
-              if (!cursor) {
-                resolve(points);
-                return;
+          var tx = db.transaction("logs", "readonly");
+          var store = tx.store;
+          var points = [];
+          return iterateCursor(store.openCursor(), function (entry) {
+            var entryLog = extractLogId(entry);
+            if (String(entryLog) === String(logId)) {
+              var point = buildPoint(entry);
+              if (point) {
+                points.push(point);
               }
-              var entry = cursor.value;
-              var entryLog = extractLogId(entry);
-              if (String(entryLog) === String(logId)) {
-                var point = buildPoint(entry);
-                if (point) {
-                  points.push(point);
-                }
-              }
-              cursor.continue();
-            };
-            request.onerror = function () {
-              reject(new Error("Failed to scan crime skills logs"));
-            };
-            tx.onerror = function () {
-              reject(tx.error || new Error("Failed to scan crime skills logs"));
-            };
-          });
+            }
+          })
+            .then(function () {
+              return tx.done;
+            })
+            .then(function () {
+              return points;
+            })
+            .catch(function (err) {
+              throw err || new Error("Failed to scan crime skills logs");
+            });
         }
 
         function dedupe(points) {
