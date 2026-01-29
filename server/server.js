@@ -82,13 +82,48 @@ app.get("/api/auth/me", async (request, reply) => {
     return { ok: false, error: "Not authenticated" };
   }
 
+  const users = app.mongo.db.collection("users");
+  const userId = request.session.user.id;
+  const user = await users.findOne({ _id: new app.mongo.ObjectId(userId) });
+
+  if (!user) {
+    reply.code(404);
+    return { ok: false, error: "User not found" };
+  }
+
+  if (user.active === false) {
+    request.session.destroy(() => {});
+    reply.code(403);
+    return { ok: false, error: "Account pending approval" };
+  }
+
   return { ok: true, user: request.session.user };
 });
 
-app.get("/api/user/ws-credentials", async (request, reply) => {
+async function requireActiveUser(request, reply) {
   if (!request.session.user) {
     reply.code(401);
-    return { ok: false, error: "Not authenticated" };
+    return null;
+  }
+  const users = app.mongo.db.collection("users");
+  const userId = request.session.user.id;
+  const user = await users.findOne({ _id: new app.mongo.ObjectId(userId) });
+
+  if (!user) {
+    reply.code(404);
+    return null;
+  }
+  if (user.active === false) {
+    reply.code(403);
+    return null;
+  }
+  return user;
+}
+
+app.get("/api/user/ws-credentials", async (request, reply) => {
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
   }
 
   const users = app.mongo.db.collection("users");
@@ -105,9 +140,9 @@ app.get("/api/user/ws-credentials", async (request, reply) => {
 });
 
 app.post("/api/user/ws-credentials", async (request, reply) => {
-  if (!request.session.user) {
-    reply.code(401);
-    return { ok: false, error: "Not authenticated" };
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
   }
 
   const { login, password } = request.body || {};
@@ -138,9 +173,9 @@ app.post("/api/user/ws-credentials", async (request, reply) => {
 });
 
 app.post("/api/user/ws-token", async (request, reply) => {
-  if (!request.session.user) {
-    reply.code(401);
-    return { ok: false, error: "Not authenticated" };
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
   }
 
   if (!TORN_AUTH_URL) {
@@ -251,12 +286,12 @@ app.post("/api/auth/signup", async (request, reply) => {
   const result = await users.insertOne({
     email,
     passwordHash,
+    active: false,
     createdAt: now,
     updatedAt: now,
   });
 
-  request.session.user = { id: result.insertedId.toString(), email };
-  return { ok: true, user: request.session.user };
+  return { ok: true, pending: true };
 });
 
 app.post("/api/auth/login", async (request, reply) => {
@@ -281,6 +316,11 @@ app.post("/api/auth/login", async (request, reply) => {
     return { ok: false, error: "Invalid credentials" };
   }
 
+  if (user.active === false) {
+    reply.code(403);
+    return { ok: false, error: "Account pending approval" };
+  }
+
   request.session.user = { id: user._id.toString(), email: user.email };
   return { ok: true, user: request.session.user };
 });
@@ -296,6 +336,67 @@ app.post("/api/auth/logout", async (request, reply) => {
     });
   });
   reply.clearCookie("sid");
+  return { ok: true };
+});
+
+app.get("/api/admin/pending-users", async (request, reply) => {
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
+  }
+  const users = app.mongo.db.collection("users");
+  const pending = await users
+    .find({ active: false })
+    .sort({ createdAt: -1 })
+    .project({ email: 1, createdAt: 1, updatedAt: 1, active: 1 })
+    .toArray();
+  return { ok: true, users: pending };
+});
+
+app.post("/api/admin/users/:id/activate", async (request, reply) => {
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
+  }
+  const users = app.mongo.db.collection("users");
+  const userId = request.params.id;
+  let objectId;
+  try {
+    objectId = new app.mongo.ObjectId(userId);
+  } catch (err) {
+    reply.code(400);
+    return { ok: false, error: "Invalid user id" };
+  }
+  const result = await users.updateOne(
+    { _id: objectId, active: false },
+    { $set: { active: true, activatedAt: new Date(), updatedAt: new Date() } }
+  );
+  if (!result.matchedCount) {
+    reply.code(404);
+    return { ok: false, error: "User not found" };
+  }
+  return { ok: true };
+});
+
+app.delete("/api/admin/users/:id", async (request, reply) => {
+  const activeUser = await requireActiveUser(request, reply);
+  if (!activeUser) {
+    return { ok: false, error: "Not authorized" };
+  }
+  const users = app.mongo.db.collection("users");
+  const userId = request.params.id;
+  let objectId;
+  try {
+    objectId = new app.mongo.ObjectId(userId);
+  } catch (err) {
+    reply.code(400);
+    return { ok: false, error: "Invalid user id" };
+  }
+  const result = await users.deleteOne({ _id: objectId, active: false });
+  if (!result.deletedCount) {
+    reply.code(404);
+    return { ok: false, error: "User not found" };
+  }
   return { ok: true };
 });
 

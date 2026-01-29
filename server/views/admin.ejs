@@ -69,6 +69,53 @@
         </div>
       </div>
 
+      <div class="card shadow-sm mt-4" ng-if="vm.user">
+        <div class="card-body">
+          <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between mb-3">
+            <div>
+              <h2 class="h5 mb-1">Pending accounts</h2>
+              <p class="text-muted mb-0">Activate or delete newly created users.</p>
+            </div>
+            <button class="btn btn-outline-secondary mt-3 mt-lg-0" ng-click="vm.loadPendingUsers()">
+              Refresh
+            </button>
+          </div>
+
+          <div class="revives-status text-muted" ng-if="vm.pendingUsersLoading">
+            Loading pending users...
+          </div>
+          <div class="revives-status text-muted" ng-if="!vm.pendingUsersLoading && !vm.pendingUsers.length">
+            No pending accounts found.
+          </div>
+
+          <div class="table-responsive" ng-if="vm.pendingUsers.length">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Created</th>
+                  <th class="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr ng-repeat="user in vm.pendingUsers track by user._id">
+                  <td>{{ user.email }}</td>
+                  <td>{{ user.createdAt | date:'medium' }}</td>
+                  <td class="text-end">
+                    <button class="btn btn-sm btn-success me-2" ng-click="vm.activateUser(user)">
+                      Activate
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" ng-click="vm.deleteUser(user)">
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <%- include('partials/toast') %>

@@ -48,6 +48,8 @@
       vm.logsExpectedTotal = null;
       vm.toast = { show: false, message: "" };
       vm.toastTimer = null;
+      vm.pendingUsers = [];
+      vm.pendingUsersLoading = false;
       vm.revives = {
         granularity: "daily",
         loading: false,
@@ -2399,6 +2401,61 @@
         );
       };
 
+      vm.loadPendingUsers = function () {
+        if (!vm.user || !vm.isAdminPage) {
+          return;
+        }
+        vm.pendingUsersLoading = true;
+        $http.get("/api/admin/pending-users").then(
+          function (response) {
+            vm.pendingUsersLoading = false;
+            vm.pendingUsers = (response.data && response.data.users) || [];
+          },
+          function (error) {
+            vm.pendingUsersLoading = false;
+            var message =
+              (error.data && error.data.error) || "Failed to load pending users.";
+            setMessage(message, "alert-danger");
+          }
+        );
+      };
+
+      vm.activateUser = function (user) {
+        if (!user || !user._id) {
+          return;
+        }
+        setMessage("");
+        $http.post("/api/admin/users/" + user._id + "/activate").then(
+          function () {
+            setMessage("User activated.", "alert-success");
+            vm.loadPendingUsers();
+          },
+          function (error) {
+            var message =
+              (error.data && error.data.error) || "Activate failed.";
+            setMessage(message, "alert-danger");
+          }
+        );
+      };
+
+      vm.deleteUser = function (user) {
+        if (!user || !user._id) {
+          return;
+        }
+        setMessage("");
+        $http.delete("/api/admin/users/" + user._id).then(
+          function () {
+            setMessage("User deleted.", "alert-secondary");
+            vm.loadPendingUsers();
+          },
+          function (error) {
+            var message =
+              (error.data && error.data.error) || "Delete failed.";
+            setMessage(message, "alert-danger");
+          }
+        );
+      };
+
       vm.disconnectBazaar = function () {
         if (vm.wsItems) {
           vm.wsItems.close();
@@ -2433,6 +2490,9 @@
             if (vm.isCrimeSkillsPage) {
               vm.loadCrimeSkills();
             }
+            if (vm.isAdminPage) {
+              vm.loadPendingUsers();
+            }
           },
           function () {
             vm.user = null;
@@ -2449,11 +2509,10 @@
       vm.signup = function () {
         setMessage("");
         $http.post("/api/auth/signup", vm.signupForm).then(
-          function (response) {
-            vm.user = response.data.user;
+          function () {
+            vm.user = null;
             vm.signupForm = { email: "", password: "" };
-            setMessage("Signup successful", "alert-success");
-            window.location.href = "/bazaar";
+            setMessage("Signup submitted. Wait for activation.", "alert-info");
           },
           function (error) {
             var message =
