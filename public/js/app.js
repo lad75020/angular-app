@@ -73,6 +73,7 @@
       vm.chart = { open: false, title: "", points: [] };
       vm.wsCredentials = { login: "", password: "" };
       vm.navAction = "";
+      var logsDb = window.logsDb;
 
       function setMessage(message, alertClass) {
         if (!message) {
@@ -315,129 +316,22 @@
         }, 3000);
       }
 
-      function iterateCursor(cursorPromise, onValue) {
-        return cursorPromise.then(function loop(cursor) {
-          if (!cursor) {
-            return;
-          }
-          onValue(cursor.value);
-          return cursor.continue().then(loop);
-        });
-      }
-
-      function openLogsDb() {
-        if (vm.logsDbPromise) {
-          return vm.logsDbPromise;
-        }
-        vm.logsDbPromise = new Promise(function (resolve, reject) {
-          if (!window.indexedDB) {
-            reject(new Error("IndexedDB is not supported"));
-            return;
-          }
-          if (!window.idb || typeof window.idb.openDB !== "function") {
-            reject(new Error("idb library is not loaded"));
-            return;
-          }
-          window.idb
-            .openDB("logs", 3, {
-              upgrade: function (db) {
-                if (db.objectStoreNames.contains("entries")) {
-                  db.deleteObjectStore("entries");
-                }
-                if (db.objectStoreNames.contains("logs")) {
-                  db.deleteObjectStore("logs");
-                }
-                var store = db.createObjectStore("logs", {
-                  keyPath: "_pk",
-                  autoIncrement: true,
-                });
-                store.createIndex("log", "log", { unique: false });
-                store.createIndex("timestamp", "timestamp", { unique: false });
-              },
-            })
-            .then(resolve)
-            .catch(function (err) {
-              reject(err || new Error("Failed to open IndexedDB"));
-            });
-        });
-        return vm.logsDbPromise;
-      }
-
-      function deleteLogsDb() {
-        return new Promise(function (resolve, reject) {
-          if (!window.indexedDB) {
-            reject(new Error("IndexedDB is not supported"));
-            return;
-          }
-          if (!window.idb || typeof window.idb.deleteDB !== "function") {
-            reject(new Error("idb library is not loaded"));
-            return;
-          }
-          if (vm.logsDbPromise) {
-            vm.logsDbPromise.then(function (db) {
-              db.close();
-            });
-            vm.logsDbPromise = null;
-          }
-          window.idb
-            .deleteDB("logs", {
-              blocked: function () {
-                reject(new Error("Logs DB delete is blocked"));
-              },
-            })
-            .then(resolve)
-            .catch(function (err) {
-              reject(err || new Error("Failed to delete logs DB"));
-            });
-        });
-      }
-
-      function clearLogsStore() {
-        return openLogsDb()
-          .then(function (db) {
-            var tx = db.transaction("logs", "readwrite");
-            tx.store.clear();
-            return tx.done;
-          })
-          .catch(function (err) {
-            throw err || new Error("Failed to clear logs store");
-          });
-      }
-
-      function addLogsBatch(entries) {
-        if (!Array.isArray(entries) || entries.length === 0) {
-          return Promise.resolve();
-        }
-        return openLogsDb()
-          .then(function (db) {
-            var tx = db.transaction("logs", "readwrite");
-            var store = tx.store;
-            entries.forEach(function (entry) {
-              if (entry && typeof entry === "object") {
-                store.add(entry);
-              }
-            });
-            return tx.done;
-          })
-          .catch(function (err) {
-            throw err || new Error("Failed to write log batch");
-          });
-      }
-
       function beginLogsFetch() {
         if (vm.logsLoading) {
+          return;
+        }
+        if (!logsDb) {
+          setMessage("Logs DB module not loaded.", "alert-danger");
           return;
         }
         vm.logsLoading = true;
         vm.logsRequestId = "logs-" + Date.now();
         vm.logsReceivedCount = 0;
         vm.logsExpectedTotal = null;
-        deleteLogsDb()
+        logsDb
+          .deleteDb()
           .then(function () {
-            return openLogsDb();
-          })
-          .then(function () {
-            return clearLogsStore();
+            return logsDb.clearStore();
           })
           .then(function () {
             vm.wsItems.send(
@@ -1102,7 +996,7 @@
               sentCount >= totalCount;
             var batchEntries = payload.batch || [];
             vm.logsReceivedCount += batchEntries.length;
-            addLogsBatch(batchEntries)
+            logsDb.addBatch(batchEntries)
               .then(function () {
                 if (
                   isDone ||
@@ -1593,28 +1487,19 @@
       }
 
       function fetchLogCounts(logId, granularity) {
-        return openLogsDb()
-          .then(function (db) {
-            var tx = db.transaction("logs", "readonly");
-            var store = tx.store;
-            var index = store.index("log");
-            var range = window.IDBKeyRange.only(logId);
-            var counts = {};
-            return iterateCursor(index.openCursor(range), function (entry) {
-              var key = getDateKey(
-                entry && entry.timestamp,
-                granularity
-              );
-              if (key) {
-                counts[key] = (counts[key] || 0) + 1;
-              }
-            })
-              .then(function () {
-                return tx.done;
-              })
-              .then(function () {
-                return counts;
-              });
+        var counts = {};
+        return logsDb
+          .forEachInIndex("log", logId, function (entry) {
+            var key = getDateKey(
+              entry && entry.timestamp,
+              granularity
+            );
+            if (key) {
+              counts[key] = (counts[key] || 0) + 1;
+            }
+          })
+          .then(function () {
+            return counts;
           })
           .catch(function (err) {
             throw err || new Error("Failed to read revive logs");
@@ -1847,13 +1732,10 @@
           return null;
         }
 
-        function runQuery(db, key) {
-          var tx = db.transaction("logs", "readonly");
-          var store = tx.store;
-          var index = store.index("log");
-          var range = window.IDBKeyRange.only(key);
+        function runQuery(key) {
           var points = [];
-          return iterateCursor(index.openCursor(range), function (entry) {
+          return logsDb
+            .forEachInIndex("log", key, function (entry) {
             var value = extractValue(entry);
             var ts = entry && entry.timestamp;
             if (Number.isFinite(value) && Number.isFinite(Number(ts))) {
@@ -1868,9 +1750,6 @@
             }
           })
             .then(function () {
-              return tx.done;
-            })
-            .then(function () {
               return points;
             })
             .catch(function (err) {
@@ -1878,11 +1757,10 @@
             });
         }
 
-        function runScan(db) {
-          var tx = db.transaction("logs", "readonly");
-          var store = tx.store;
+        function runScan() {
           var points = [];
-          return iterateCursor(store.openCursor(), function (entry) {
+          return logsDb
+            .forEachStore(function (entry) {
             var entryLog = extractLogId(entry);
             if (String(entryLog) === String(logId)) {
               var value = extractValue(entry);
@@ -1900,9 +1778,6 @@
             }
           })
             .then(function () {
-              return tx.done;
-            })
-            .then(function () {
               return points;
             })
             .catch(function (err) {
@@ -1910,29 +1785,27 @@
             });
         }
 
-        return openLogsDb().then(function (db) {
-          return Promise.all([
-            runQuery(db, logId),
-            runQuery(db, String(logId)),
-          ]).then(function (results) {
-            var combined = results[0].concat(results[1]);
-            if (!combined.length) {
-              return runScan(db);
+        return Promise.all([
+          runQuery(logId),
+          runQuery(String(logId)),
+        ]).then(function (results) {
+          var combined = results[0].concat(results[1]);
+          if (!combined.length) {
+            return runScan();
+          }
+          var seen = {};
+          var unique = [];
+          combined.forEach(function (point) {
+            var key = point.date.getTime() + ":" + point.value;
+            if (!seen[key]) {
+              seen[key] = true;
+              unique.push(point);
             }
-            var seen = {};
-            var unique = [];
-            combined.forEach(function (point) {
-              var key = point.date.getTime() + ":" + point.value;
-              if (!seen[key]) {
-                seen[key] = true;
-                unique.push(point);
-              }
-            });
-            unique.sort(function (a, b) {
-              return a.date - b.date;
-            });
-            return unique;
           });
+          unique.sort(function (a, b) {
+            return a.date - b.date;
+          });
+          return unique;
         });
       }
 
@@ -2014,21 +1887,15 @@
           return { crime: crime, date: date, value: skill, ts: seconds };
         }
 
-        function runQuery(db, key) {
-          var tx = db.transaction("logs", "readonly");
-          var store = tx.store;
-          var index = store.index("log");
-          var range = window.IDBKeyRange.only(key);
+        function runQuery(key) {
           var points = [];
-          return iterateCursor(index.openCursor(range), function (entry) {
+          return logsDb
+            .forEachInIndex("log", key, function (entry) {
             var point = buildPoint(entry);
             if (point) {
               points.push(point);
             }
           })
-            .then(function () {
-              return tx.done;
-            })
             .then(function () {
               return points;
             })
@@ -2037,11 +1904,10 @@
             });
         }
 
-        function runScan(db) {
-          var tx = db.transaction("logs", "readonly");
-          var store = tx.store;
+        function runScan() {
           var points = [];
-          return iterateCursor(store.openCursor(), function (entry) {
+          return logsDb
+            .forEachStore(function (entry) {
             var entryLog = extractLogId(entry);
             if (String(entryLog) === String(logId)) {
               var point = buildPoint(entry);
@@ -2050,9 +1916,6 @@
               }
             }
           })
-            .then(function () {
-              return tx.done;
-            })
             .then(function () {
               return points;
             })
@@ -2074,37 +1937,35 @@
           return unique;
         }
 
-        return openLogsDb().then(function (db) {
-          return Promise.all([
-            runQuery(db, logId),
-            runQuery(db, String(logId)),
-          ])
-            .then(function (results) {
-              var combined = results[0].concat(results[1]);
-              if (!combined.length) {
-                return runScan(db);
+        return Promise.all([
+          runQuery(logId),
+          runQuery(String(logId)),
+        ])
+          .then(function (results) {
+            var combined = results[0].concat(results[1]);
+            if (!combined.length) {
+              return runScan();
+            }
+            return combined;
+          })
+          .then(function (points) {
+            var unique = dedupe(points);
+            var grouped = {};
+            unique.forEach(function (point) {
+              if (!grouped[point.crime]) {
+                grouped[point.crime] = [];
               }
-              return combined;
-            })
-            .then(function (points) {
-              var unique = dedupe(points);
-              var grouped = {};
-              unique.forEach(function (point) {
-                if (!grouped[point.crime]) {
-                  grouped[point.crime] = [];
-                }
-                grouped[point.crime].push({ date: point.date, value: point.value });
-              });
-              return Object.keys(grouped)
-                .sort()
-                .map(function (label) {
-                  grouped[label].sort(function (a, b) {
-                    return a.date - b.date;
-                  });
-                  return { label: label, points: grouped[label] };
-                });
+              grouped[point.crime].push({ date: point.date, value: point.value });
             });
-        });
+            return Object.keys(grouped)
+              .sort()
+              .map(function (label) {
+                grouped[label].sort(function (a, b) {
+                  return a.date - b.date;
+                });
+                return { label: label, points: grouped[label] };
+              });
+          });
       }
 
       function drawTrainingChart(seriesList) {
